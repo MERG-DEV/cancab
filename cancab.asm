@@ -1,5 +1,5 @@
 ;     TITLE   "Source for DCC CAB for CBUS"
-;     ; filename cancab2s.asm 28/04/11
+;     ; filename cancab2t1.asm  05/06/14
 ; 
 ;      All source code is copyright (C) the author(s) concerned
 ;         (c) Mike Bolton 2009-2012
@@ -204,6 +204,8 @@
 ; v2s   28/04/14 MPB - correction to Fn ranges 13 to 20 amd 21 to 28
 ; V2sBeta1  04/05/14 PNB - Update parameter block to latest spec including BETA_VER, use cbusdefs8h
 ; V2s       25/05/14 PNB - Build for release
+; v2tBeta1  05/06/14 MPB - added long address read and write in service mode.Beta version 1
+; v2tBeta2  01/12/14 MPB - corection for OK message when in service mode programmimg.
 
 
 
@@ -221,8 +223,8 @@
 
 MAN_NO      equ MANU_MERG ;manufacturer number
 MAJOR_VER   equ 2
-MINOR_VER   equ "s"
-BETA_VER    equ 0           ; Beta build number: Set to zero for a release build
+MINOR_VER   equ "t"
+BETA_VER    equ 2            ; Beta build number: Set to zero for a release build
 MODULE_ID   equ MTYP_CANCAB ; id to identify this type of module
 EVT_NUM     equ 0           ; Number of events
 EVperEVT    equ 0           ; Event variables per event
@@ -544,6 +546,11 @@ MAX_FUN  equ    27
           ; 2 is register
           ; 3 is address if needed
           ; bit 2 is 1 for read and 0 for write
+          ; bit 3  Long address in service mode
+          ; bit 4  Expecting an ACK
+          ; bit 5  Block numbers in service mode
+          ; bit 6  Set for long address hi byte read/write
+          ; bit 7  Set for long address lo byte read/write
 
   Dispmode    ; Display mode, when certain keys have special function
           ; 0 is prompting for steal  \_ These 2 bits are same as in GLOC flag byte so,
@@ -564,13 +571,18 @@ MAX_FUN  equ    27
   CVnum4
   
   CVval   ;CV value  Hex
-  CVval1    ;entered CV value (3 digits)
+
+  CVval1    ;entered CV value (3 digits)or 4 if long address.
   CVval2
   CVval3
+  CVval4
   CVchr2    ;for CV read
+  CVtemp
+  CVtemp1
   CV1
   CV2
   CV3
+  CV4
 
   L_adr_hi
   L_adr_lo
@@ -1568,7 +1580,15 @@ lpint movwf W_tempL
 
 ;*********************************************************************
 
-main  
+main  ;btfss  Progmode,4    ;service mode?
+    ;bra    main1
+    ;btfss  Progmode,3
+    ;bra    main1
+    ;movlw  B'00011100'   ;test for multiple writes
+    ;andwf  Sermode,W
+    ;sublw  B'00001000'   ;but 3 set and 2 and 4 clear
+    ;bnz    main1
+    ;call wrt_lng     ;write next byte
     
 
   
@@ -2327,7 +2347,11 @@ con_num movlw 3
     call  lcd_wrt
     bra   nonum
 
-cvval movlw 3
+cvval btfss Sermode,3   ;is it long addres (CV=17)?
+    bra   cvval2
+    movlw 4
+    bra   cvval1
+cvval2  movlw 3
 cvval1  subwf Numcount,W
     bz    nonum
     movff Key_temp,POSTINC2
@@ -2433,7 +2457,7 @@ setup_start
     subwf W_temp,w      ; If more than 100, test version so just report version less 100
     bc    scsver        ; If less than 100, continue with original number
     movf  W_temp
-    movlw 'T'
+    movlw "T"
     call  lcd_wrt
 
 scsver  movf  W_temp,w    
@@ -2495,7 +2519,7 @@ packet  movlw 0x07      ;is it a reset frame
     bz    re_set      ;system reset
     movlw 0x4C
     subwf Rx0d0,W
-    bz    serr1     ;service mode error 
+    bz    serr1     ;service mode reply (ack or error)  
     movlw 0x85      
     subwf Rx0d0,W
     bz    rd_back1    ;read back of CV in service mode
@@ -2707,6 +2731,10 @@ set1a   movff Rx0d1,Handle    ;put in handle
     movff Rx0d5,Fr1   ;reinstate functions
     movff Rx0d6,Fr2
     movff Rx0d7,Fr3
+    movff Rx0d2,Adr_hi
+    movff Rx0d3,Adr_lo
+
+    call  adr_chr       ;put new address into ASCII for display
         call    store_funcs             ; Store functions status in EEPROM
     movlw LOW E_hndle
     movwf EEADR
@@ -2874,10 +2902,33 @@ serr  movf  Handle,W      ;check handle is for this cab.
     btfss Sermode,4     ;is it expecting an error /ack
     bra   serr_4
     movf  Rx0d2,W
+    movwf Err_tmp
     bz    serr_4        ;no error 0
-    call  err_msg
-serr_4  bcf   Sermode,4
-errdun  bcf   Datmode,0
+    sublw 3         ;ACK
+    bnz   serr_1
+    btfss Sermode,3     ;multiple writes
+    bra   serr_1        ;no
+    btfsc Sermode,7     ;last one or CV29
+    bra   serr_2
+    call  wrtlng1       ;send CV18
+    bra   errdun1
+serr_2  btfsc Sermode,6
+    bra   serr_3
+    call  wrtlng2
+    bra   errdun1
+serr_3  call  subOK       ;multiple writes OK 
+    bra   serr_4      ;
+    
+serr_1  call  err_msg
+    movf  WREG,W
+    bz    serr_4        ;error or end
+    bra   errdun        ;leave in multiple writes
+serr_4  
+    bcf   Sermode,3     ;out of long address
+    bcf   Sermode,6     ;out of multiple writes
+    bcf   Sermode,7
+errdun  bcf   Sermode,4
+errdun1 bcf   Datmode,0
       goto  main
 
 prog_mode btfsc Progmode,2    ;is it CV value entry now?
@@ -2890,11 +2941,22 @@ prog_mode btfsc Progmode,2    ;is it CV value entry now?
     bra   adr_rd
 prg2  bcf   Progmode,0
     bsf   Progmode,2      ;set for CV value entry
-    call  cvaconv       ;convert to HEX bytes and check
+  
+    call  cvaconv       ;convert CVnumber to HEX bytes and check    
+    
 prog_er1 sublw  0
     bnz   prog_err
-    nop
+    movlw .17
+    subwf CVnum_lo,W      ;is it long address service mode prog.?
+    bz    lng_prg
+    bcf   Sermode,3     ;not long
     goto  main
+lng_prg movlw B'00111111'
+    andwf Sermode,F
+    bsf   Sermode,3     ;flag long address
+  
+    goto  main
+    
 adr_rd  movlw 7
     subwf Sermode,W
     bnz   prg2        ;is it read address?
@@ -2904,13 +2966,18 @@ adr_rd  movlw 7
 
 prog_err movlw  B'00010000'     ;clear all except service flag  
     andwf Progmode,F
+    bcf   Sermode,3     ;out of long address mode if set
     call  beep
     call  prog_sub
     goto  keyback
 prog2 call  prog_3
     goto  keyback
-sendCV  call  cvv_conv
-    sublw 0
+sendCV  btfss Sermode,3     ;long address?
+    bra   sendCV1
+    call  adrconv
+    bra   sendCV2
+sendCV1 call  cvv_conv
+sendCV2 sublw 0
     bnz   prg_err1
     btfsc Progmode,4
     bra   ser_prog      ;service mode program
@@ -2959,20 +3026,95 @@ longadr call  lng_conv      ;convert long address to HEX (OTM prog)
     movlw 0xFD
     movwf Tx1d4
     call  sendTXa
+    call  ldely       ;wait till sent by CS
+
+    movlw 0x21        ;release loco on old address
+    movwf Tx1d0
+    movf  Handle,W      ;get handle
+    movwf Tx1d1
+    movlw 2
+    movwf Dlc
+    call  sendTXa
+    bcf   Locstat,0     ;no loco selected
+
+    movlw 0x40        ;RLOC
+    movwf Tx1d0
+    movff L_adr_hi,Tx1d1
+    bsf   Tx1d1,6
+    bsf   Tx1d1,7
+    movff L_adr_lo,Tx1d2
+    movlw 3
+    movwf Dlc
+    bsf   Modstat,1     ;for answer
+    call  sendTXa       ;request new loco
+  
     clrf  Progmode
     bcf   Locstat,6     ;out of prog mode
     bcf   Datmode,6     ;not busy
-    call  lcd_clr
-    call  loco_lcd
-    bsf   Locstat,0     ;re-enable loco
+;   call  lcd_clr
+;   call  loco_lcd
+;   bsf   Locstat,0     ;re-enable loco
     goto  keyback
 l_err bcf   Progmode,2
     nop             ;needs changing here?
     goto  keyback
 
-rd_back call  cv_ans        ;cv answer
+rd_back btfsc Sermode,3     ;long address read sequence?
+    bra   rd_long
+    call  cv_ans        ;cv answer
     bcf   Datmode,0
     goto  keyback       ;?
+rd_long movlw B'11000000'
+    andwf Sermode,W
+    bnz   rd_lng2       ;check if to test for long bit in CV29
+    btfsc Rx0d4,5       ;is it in long address mode?
+    bra   rd_lng1       ;yes
+    bcf   Sermode,3     ;out of long
+    call  read_disp
+    bcf   Sermode,4     ;not waiting
+    movlw .17
+    movwf CVnum_lo
+    call  cv_read1      ;read just CV17
+    bcf   Datmode,0     ;done frame 
+    goto  keyback
+rd_lng1 call  lcd_clr       ;put up long address message
+    movlw HIGH Progstr2
+    movwf TBLPTRH
+    movlw LOW Progstr2
+    call  lcd_str
+    call  lcd_cr
+    bsf   LCD_PORT,LCD_RS
+    movlw "="
+    call  lcd_wrt
+    movlw " "
+    call  lcd_wrt
+    bsf   Sermode,6
+    movlw .17
+    movwf CVnum_lo
+    bcf   Datmode,0     ;done frame
+    bcf   Sermode,4     ;not waiting
+    call  cv_read1      ;read just CV17
+    goto  keyback
+
+rd_lng2 btfsc Sermode,7     ;which address byte
+    bra   rd_lng3       ;second address byte
+    movff Rx0d4,CVtemp    ;save high byte
+    movlw .18
+    movwf CVnum_lo
+    bcf   Datmode,0     ;done frame
+    bcf   Sermode,4     ;not waiting
+    bsf   Sermode,7     ;for CV18
+    call  cv_read1      ;read just CV18
+    bcf   Datmode,0     ;done frame
+    goto  keyback
+
+rd_lng3 movff Rx0d4,CVtemp1
+    call  cv_ans_l      ;long answer
+
+    bcf   Datmode,0
+    goto  keyback
+    
+    
 
 opdev btfss Datmode,4     ;has a DN?
     bra   nopdev
@@ -3216,6 +3358,7 @@ re_set1a  clrf  Tx1con    ;make sure Tx1con is clear
     clrf  Setupmode
     clrf  Dispmode
     lfsr  FSR2,Num1     ;reset pointer
+    clrf  Numcount
     movlw " "
     movwf Adr1
     movwf Adr2
@@ -3865,8 +4008,10 @@ nospeed return
 adrconv clrf  Adr_hi
     clrf  Adr_lo
     decf  FSR2L
+    movf  Numcount,F
+    bz    adr_err       ;no number
     btfsc Numcount,2      ;4 digits?
-    bsf Adr_hi,7      ;flag long address
+    bsf   Adr_hi,7      ;flag long address
     movff POSTDEC2,Adr_lo   ;ones
     decf  Numcount,F
     bz    last_num
@@ -3903,7 +4048,8 @@ last_num
     return
 long  bsf   Adr_hi,7      ;set top two bits for long address
     bsf   Adr_hi,6  
-    return
+    retlw 0
+adr_err retlw 1
 
 ;*************************************************************************
 
@@ -4149,7 +4295,8 @@ lcd_speed call  spd_chr
 ;     error message after service mode action
 
 err_msg ; call  beep
-      movwf Err_tmp
+    ; movwf Err_tmp
+      btfss Sermode,3
       call  read_disp
       movlw 1
       subwf Err_tmp,W
@@ -4166,22 +4313,29 @@ err_msg ; call  beep
       movlw 5
       subwf Err_tmp,W
       bz    over_rng
-      return
-no_ack    movlw HIGH No_ack
+      retlw 0
+no_ack    btfss Sermode,3   ;long address no ack?
+      bra   no_ack1
+      movlw 0x42
+      call  cur_pos
+
+no_ack1   movlw HIGH No_ack
       movwf TBLPTRH 
       movlw LOW No_ack
       call  lcd_str
       call  beep
       bsf   Sermode,5
-      return
+      retlw 0
 over_ld   movlw HIGH Over_ld
       movwf TBLPTRH
       movlw LOW Over_ld
       call  lcd_str
       call  beep
       bsf   Sermode,5
-      return
-ack_ok    call  lcd_clr
+      retlw 0
+ack_ok    btfsc Sermode,3     ;is it multiple writes?
+      retlw 1
+      call  lcd_clr
       movlw B'00000011'
       andwf Sermode,W
       btfss WREG,1
@@ -4216,7 +4370,7 @@ ack_ok3   movlw HIGH Address
       call  lcd_str
       call  beep
       bsf   Sermode,5
-      return
+      retlw 0
 
     
 ack_ok1   movlw "C"
@@ -4242,21 +4396,21 @@ ack_ok2   movlw " "
       call  lcd_str
       call  beep
       bsf   Sermode,5
-      return
+      retlw 0
 busy    movlw HIGH Busy
       movwf TBLPTRH    
       movlw LOW Busy
       call  lcd_str
       call  beep
       bsf   Sermode,5
-      return
+      retlw 0
 over_rng  movlw HIGH Err
       movwf TBLPTRH  
       movlw LOW Err
       call  lcd_str
       call  beep
       bsf   Sermode,5
-      return
+      retlw 0
 
 ;**********************************************************************
 ;
@@ -4516,7 +4670,7 @@ spd1  return
 
 ;***************************************************************************
 ;
-;   send keepalive packet
+;   send keepalive  
 
 kp_pkt  movlw OPC_DKEEP   ;keep alive packet
     movwf Tx0d0
@@ -4751,7 +4905,7 @@ out1  movff Handle,Tx1d1
                 movwf   Dlc
                 call    sendTXa
 
-               ; Update display for function sendt
+               ; Update display for function send
 
 
 fdisp           movlw 0x40      ; Position cursor start of line 2
@@ -5009,7 +5163,9 @@ prog_3a   btfsc Sermode,2     ;is it read
       bra   prog_3c
       call  send_adr      
       return
-prog_3b   movlw HIGH Prog_CV
+prog_3b   btfsc Sermode,3     ;long address service mode prompt?
+      bra   prog_3e
+      movlw HIGH Prog_CV
       movwf TBLPTRH   
       movlw LOW Prog_CV
       call  lcd_str
@@ -5017,7 +5173,7 @@ prog_3d   call  lcd_cr
       call  cv_disp
       movlw "="
       call  lcd_wrt
-      lfsr  FSR2,CVval1
+prog_3f   lfsr  FSR2,CVval1
       bcf   Progmode,2
       bsf   Progmode,3
       return
@@ -5026,6 +5182,18 @@ prog_3c   movlw HIGH Pmode3
       movlw LOW Pmode3
       call  lcd_str
       bra   prog_3d
+prog_3e   call  lcd_clr       ;put up long address message
+      movlw HIGH Progstr2
+      movwf TBLPTRH
+      movlw LOW Progstr2
+      call  lcd_str
+      call  lcd_cr
+      bsf   LCD_PORT,LCD_RS
+      movlw "="
+      call  lcd_wrt
+      movlw " "
+      call  lcd_wrt
+      bra   prog_3f
 
 prog_4a call  newdisp
 
@@ -5059,7 +5227,7 @@ prog_5    bsf   Progmode,4    ;service mode
       bcf   Progmode,1
       bsf   Sermode,2   ; start in service mode read
 
-      movlw LOW Ser_md    ;write service mode deafult
+      movlw LOW Ser_md    ;write service mode default
       movwf EEADR
       movf  Sermode,W
       call  eewrite
@@ -5085,11 +5253,13 @@ read_CV   call  read_disp
       andwf Progmode,F
       return
 
-read_disp call  lcd_clr     ;ser display for read
+read_disp call  lcd_clr     ;set display for read
       btfss Sermode,1   ;test for register or adr mode
       bra   rd_disp1
       btfsc Sermode,0   ;address?
       bra   rd_disp2
+    
+
       movlw "R"
       call  lcd_wrt
       movlw "e"
@@ -5099,23 +5269,16 @@ read_disp call  lcd_clr     ;ser display for read
       movlw 0x20
       call  lcd_wrt
       bra   rd_disp3
-rd_disp2  movlw "A"
-      call  lcd_wrt
-      movlw "d"
-      call  lcd_wrt
-      movlw "d"
-      call  lcd_wrt
-      movlw "r"
-      call  lcd_wrt
-      movlw "e"
-      call  lcd_wrt
-      movlw "s"
-      call  lcd_wrt
-      movlw "s"
-      call  lcd_wrt
+rd_disp2  movlw HIGH Address
+      movwf TBLPTRH
+      movlw LOW Address
+      call  lcd_str
+      
       bra   rd_disp4
       
-rd_disp1  movlw "C"
+rd_disp1  btfsc Sermode,3     ;is it a long address read?
+      bra   rd_disp5      ;yes
+      movlw "C"
       call  lcd_wrt
       movlw "V"
       call  lcd_wrt
@@ -5129,6 +5292,9 @@ rd_disp4  call  lcd_cr
       call  lcd_wrt
       movlw 0x20
       call  lcd_wrt
+      return
+
+rd_disp5  nop
       return
       
 ;********************************************************************************
@@ -5308,18 +5474,20 @@ cv_send movlw 0x82      ;OPS mode write
 ;
 ;   write CV in service mode
 
-cv_wrt  movlw 0xA2
-    movwf Tx1d0     ;write in service mode
+cv_wrt  btfsc Sermode,3   ;long address?
+    bra   wrt_lng
+cv_wrt1 movlw 0xA2
+cv_wrt2 movwf Tx1d0     ;write in service mode
     movff Handle,Tx1d1
     movff CVnum_hi,Tx1d2
     movff CVnum_lo,Tx1d3
     clrf  Tx1d4     ;clear mode byte
-    movlw B'11111010'
+    movlw B'00000010'   ;B'11111010'
     andwf Sermode,W
     bz    wrt_dir
     movlw B'00000011'
     andwf Sermode,W
-    addlw 1
+    addlw 1       ;for page or reg mode
     movwf Tx1d4
 wrt_dir movff CVval,Tx1d5   ;get value
     movlw 6
@@ -5330,9 +5498,64 @@ wrt_dir movff CVval,Tx1d5   ;get value
     bsf   Sermode,4   ;for error / ack
     return
 
+wrt_lng btfsc Sermode,6   ;which CV?
+    bra   wrtlng1     ;not CV17
+    movff Adr_hi,CVval
+    bsf   Sermode,6   ;for next
+    bra   cv_wrt1     ;do CV17
+wrtlng1 btfsc Sermode,7   ;not CV18
+    bra   wrtlng2
+    incf  CVnum_lo,F    ;now CV18
+    movff Adr_lo,CVval
+    movlw B'00000011'
+    andwf Sermode,W   ;is it direct?
+    bnz   wrtlng3     ;not direct so don't do bit set 
+    bsf   Sermode,7
+    bcf   Sermode,6
+    bra   cv_wrt1     ;do CV18
+wrtlng3 bsf   Sermode,6
+    bsf   Sermode,7
+    bra   cv_wrt1
+    bsf   Sermode,4   ;if not set?
+    return
+ 
+wrtlng2 movlw 0xA2
+    movwf Tx1d0     ;write in service mode
+    movff Handle,Tx1d1
+    movff CVnum_hi,Tx1d2
+    movlw 0x1D      ;CV29
+    movwf Tx1d3
+    movlw 1       ;bit mode write
+    movwf Tx1d4
+    movlw 0xFD      ;NMRA set bit 5
+    movwf Tx1d5
+    movlw 6
+    movwf Dlc
+    bsf   Sermode,6
+    bsf   Sermode,7   ;for last
+    movlw B'00010000'
+    movwf Progmode    ;for reply
+    bsf   Sermode,4   ;for error / ack
+    call  sendTXa
+    return
+  
+
+
 ;   read a CV in service mode
 
-cv_read movlw 0x84    ;read CV
+cv_read btfsc Sermode,3   ;already in long read?
+    bra   lng_read
+    movf  CVnum_hi,F    ;test for long address
+    bnz   cv_read1    ;more than 255
+    movlw .17
+    subwf CVnum_lo,W
+    bnz   cv_read1
+    bra   lng_read    ;read long address
+;   sublw 1
+;   bz    cv_read1    ;not in long address mode (CV29)
+    return
+
+cv_read1    movlw 0x84    ;read CV
     movwf Tx1d0
     movff Handle,Tx1d1
     
@@ -5340,6 +5563,7 @@ cv_read movlw 0x84    ;read CV
     movff CVnum_lo,Tx1d3
     bcf   Sermode,2
     movf  Sermode,W
+    andlw B'00000011'
     addlw 1     ;direct read is always bit read
     
     movwf Tx1d4
@@ -5353,12 +5577,22 @@ cv_read movlw 0x84    ;read CV
     bsf   Sermode,4   ;for error / ack
     return  
 
+;************************************************************
+
+lng_read bsf  Sermode,3   ;set to long read
+    bcf   Sermode,6   ;read CV29
+    bcf   Sermode,7
+    movlw .29
+    movwf CVnum_lo    ;to read CV29
+    bra   cv_read1
+    
 ;***************************************************************************
 
-;   answer to valid service mode read 
+;   answer to valid service mode read
+;   converts single byte to decimal and displays  
 
 cv_ans  movf  Handle,W
-    subwf Rx0d1   ;is it this CAB?
+    subwf Rx0d1,W   ;is it this CAB?
     bz    cv_ans1 
     return
 cv_ans1 btfss Progmode,4  ;is it service mode?
@@ -5395,11 +5629,89 @@ CV_ones   movf  CVchr2,W
       call  beep
       bcf   Sermode,4
       bsf   Sermode,5
-
       
 
       return
 
+;***********************************************************************
+
+;     long address service mode read
+;     converts two bytes in CVtemp and CVtemp1 to decimal and displays      
+
+cv_ans_l  movf  Handle,W
+      subwf Rx0d1,W   ;is it this CAB?
+      bz    cv_ansL 
+      return
+cv_ansL   btfss Progmode,4  ;is it service mode?
+      return  
+    
+      btfss Progmode,4  ;is it service mode?
+      return
+
+;   convert two bytes to chars
+
+      movlw B'00111111'   ;mask long address bits
+      andwf CVtemp,W
+      movwf Hi_temp     ;temp for address calculations
+      movff CVtemp1,Lo_temp
+      clrf  Numcount    ;number of chars
+      movlw "0"       ;clear chars
+      movwf CV1
+      movwf CV2
+      movwf CV3
+      movwf CV4
+
+cthous    movlw 0xE8      ;lo byte of 1000
+      subwf Lo_temp,F
+      movlw 0x03      ;hi byte of 1000
+      subwfb  Hi_temp,F
+      bn    chuns     ;overflow
+      incf  CV1       ;add to 1000s
+      bra   cthous      ;again
+
+chuns   movlw 0xE8      ;add back 1000
+      addwf Lo_temp,F
+      movlw 0x03
+      addwfc  Hi_temp,F
+chuns_1   movlw 0x64      ;100
+      subwf Lo_temp,F
+      movlw 0
+      subwfb  Hi_temp,F
+      bn    ctens_0     ;overflow
+      incf  CV2       ;add to 100s
+      bra   chuns_1
+
+ctens_0   movlw 0x64      ;add back 100
+      addwf Lo_temp,F
+
+ctens_1   movlw 0x0A      ;10
+      subwf Lo_temp,F
+      bn    cones_0     ;overflow
+      incf  CV3     ;add to tens
+      bra   ctens_1
+
+cones_0   movlw 0x0A      ;add back 10
+      addwf Lo_temp,W
+      addwf CV4,F
+
+      bsf   LCD_PORT,LCD_RS 
+      movf  CV1,W       ;4 address chars
+      call  lcd_wrt
+      movf  CV2,W
+      call  lcd_wrt
+      movf  CV3,W
+      call  lcd_wrt
+      movf  CV4,W
+      call  lcd_wrt
+
+      call  beep
+      bcf   Sermode,4
+      bsf   Sermode,5
+      bcf   Sermode,7
+      bcf   Sermode,6
+      bcf   Sermode,3
+
+      return
 ;*******************************************************************************
 enum  clrf  Tx1con      ;CAN ID enumeration. Send RTR frame, start timer
 
@@ -5904,6 +6216,32 @@ funFr2  movlw 0x40
     call  lcd_str
     
 funback return
+
+;************************************************
+;   OK message after setting long address
+
+subOK movlw 0x40
+    call  cur_pos
+    movf  CVval1,W
+    addlw 0x30
+    call  lcd_wrt
+    movf  CVval2,W
+    addlw 0x30
+    call  lcd_wrt
+    movf  CVval3,W
+    addlw 0x30
+    call  lcd_wrt
+    movf  CVval4,W
+    addlw 0x30
+    call  lcd_wrt
+    movlw " "
+    call  lcd_wrt
+    movlw "O"
+    call  lcd_wrt
+    movlw "K"
+    call  lcd_wrt
+    return
+
 
 ;*********************************************************
 ;   get function status from EEPROM
