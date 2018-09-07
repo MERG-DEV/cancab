@@ -1,6 +1,45 @@
 ;     TITLE   "Source for DCC CAB for CBUS"
-;     ; filename cancab2n.asm 23/12/11
+;     ; filename cancab2p.asm 20/02/12
 ; 
+;      All source code is copyright (C) the author(s) concerned
+;         (c) Mike Bolton 2009-2012
+;     With some modifications (c) Pete Brownlow and (c) Roger Healey
+;     as detailed in the revision history below
+;
+;   This program is free software: you can redistribute it and/or modify
+;   it under the terms of the GNU General Public License as published by
+;   the Free Software Foundation, version 3 of the License, as set out
+;   at <http:;www.gnu.org/licenses/>.
+;
+;   This program is distributed in the hope that it will be useful,
+;   but WITHOUT ANY WARRANTY; without even the implied warranty of
+;   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+;   See the GNU General Public License for more details.
+;
+;   As set out in the GNU General Public License, you must retain and acknowledge
+;   the statements above relating to copyright and licensing. You must also
+;   state clearly any modifications made.  Please therefore retain this header
+;   and add documentation of any changes you make. If you distribute a changed
+;   version, you must make those changes publicly available.
+;
+;   The GNU license requires that if you distribute this software, changed or
+;   unchanged, or software which includes code from this software, including
+;   the supply of hardware that incorporates this software, you MUST either
+;   include the source code or a link to a location where you make the source
+;   publicly available. The best way to make your changes publicly available is
+;   via the MERG online resources.  See <www.merg.co.uk>
+;
+;   Note that this software uses a Boot Loader that is derived from that supplied
+;   by Microchip. That part of the software is distributed under the Microchip
+;   license which requires that it is only used on Microchip processors.
+;   See page 15 of <http:;ww1.microchip.com/downloads/en/AppNotes/00247a.pdf>
+;   for details of the Microchip licensing.  The bootloader is distributed with
+;   this software as a "system library" as defined in section 1 of the GNU Public
+;   license and is not licensed under GNU.
+;   You must conform to Microchip license terms in respect of the bootloader.
+;
+
+
 ; Uses 4 MHz resonator and PLL for 16 MHz clock
 ; CAB with OTM and service mode programming, one speed knob and self enum for CAN_ID
 
@@ -106,31 +145,39 @@
 ;             Saved BSR in LPINT 
 ;             Now uses keep alive packet (0x23) for the keep alive function - instead of speed/dir packet
 ;             Includes updated cbusdefs7h.inc matching latest version of spec
-; Rev 2j  20/08/11  MPB   As Rev i but with modified screen for accessory inputs. (as in Rev g)
-; Rev 2l  11/09/11  PNB   Fixed stop behaviour, , 
-;             Add firmware update message during boot loading,
-;             Send full range speed byte to command station in 14 and 28 step mode
-;             Check for non-zero speed when receiving PLOC, and set this speed and direction if non-zero
-;             Always use function settings received in PLOC (for when cmd station caches settings)
-;             Check for session not found error whilst controlling loco (support for forced takeover)
-;                         Display ON or OFF when selecting loco functions - stays on display until do something else
-;                         Any leading zero assumes long address
-;                         Release a moving loco displays Dispatch?
-;             String display routine terminates after 8 chars even if terminating zero not found (aovids lockup with wrong language file version)
-;             CAN receive now ignores extended frames (except when boot loading)
-; Rev 2m2         Build 2.  Based on Rev 2m1
-;             Added facility for momentary Fn keys. Press Consist with Fn key in.  (major changes here)
-;             Changes so loco is still under control when programming.
-;             Various changes to device mode.  
-;             Correction in newid1 for keepalive CAN_ID.
-;             Fn status now held in EEPROM. Bit 0 is on or off, bit 1 is mom mode. Kept during walkaround etc.
-;             On / off cleared to all off on reset or loco change.
-;             Mom for all Fn keys only cleared by resetting with 'Consist' in. Otherwise is remembered for that CAB. 
-;             Conditional assembly for conventional Fn frames or for DFNON / DFNOF. (not both at once)
-; Rev 2m3         Fix to WDT resets
-; Rev 2m4         Fix to reset action so Fn tog / mom remains unless deliberately cleared
-; Rev 2m5         Fix for acc numbers folowing speed change  20/12/11
-; Rev 2n         Release version of 2m5
+; Rev 2j  20/08/11  MPB As Rev i but with modified screen for accessory inputs. (as in Rev g)
+; Rev 2l  11/09/11  PNB Fixed stop behaviour, , 
+;       Add firmware update message during boot loading,
+;       Send full range speed byte to command station in 14 and 28 step mode
+;       Check for non-zero speed when receiving PLOC, and set this speed and direction if non-zero
+;       Always use function settings received in PLOC (for when cmd station caches settings)
+;       Check for session not found error whilst controlling loco (support for forced takeover)
+;                               Display ON or OFF when selecting loco functions - stays on display until do something else
+;                               Any leading zero assumes long address
+;                               Release a moving loco displays Dispatch?
+;       String display routine terminates after 8 chars even if terminating zero not found (aovids lockup with wrong language file version)
+;       CAN receive now ignores extended frames (except when boot loading)
+; Rev 2m2               MPB Build 2.  Based on Rev 2m1
+;         Added facility for momentary Fn keys. Press Consist with Fn key in.  (major changes here)
+;         Changes so loco is still under control when programming.
+;         Various changes to device mode.  
+;         Correction in newid1 for keepalive CAN_ID.
+;         Fn status now held in EEPROM. Bit 0 is on or off, bit 1 is mom mode. Kept during walkaround etc.
+;         On / off cleared to all off on reset or loco change.
+;         Mom for all Fn keys only cleared by resetting with 'Consist' in. Otherwise is remembered for that CAB. 
+;         Conditional assembly for conventional Fn frames or for DFNON / DFNOF. (not both at once)
+; Rev 2m3   MPB Fix to WDT resets
+; Rev 2m4   MPB Fix to reset action so Fn tog / mom remains unless deliberately cleared
+; Rev 2m5   MPB Fix for acc numbers folowing speed change  20/12/11
+; Rev 2n                MPB     Release version of 2m5
+; Rev 2p                PNB     Save loco address in EEPROM for walkaround and check this also on reconnect
+;                               When taking over new loco, save function settings from PLOC into EEPROM
+;                               Send 1 speed packet when taking over loco (required for compatiblity with cancmd up to ver 3 which does not cache direction)
+;                               Send CBUS event packet when function key pressed (in addition to DCC function packet)
+;               Fix blank screen if handle or address does not match when plug in after walkabout - now goes to loco prompt
+;               Implemented PNN response to QNN
+;                               Fix problem with bit pattern for loco functions F10,F11,F12
+
 
 ; Assembly options
   LIST  P=18F2480,r=hex,N=75,C=120,T=ON
@@ -140,20 +187,21 @@
   ;definitions  Change these to suit hardware.
 
   include "cbuslib/cbusdefs.inc"  
-  include "cabmessages.inc" ; Version of messages file only changes if messages are added
+  include "cabmessages.inc" ; Version of messages file only changes if messages are added or message lengths changed
 
 ; Define the node parameters to be stored at node_id
 
 Man_no      equ MANU_MERG ;manufacturer number
-Major_Ver equ 2 
-Minor_Ver equ "n"   
+Major_Ver   equ 2
+Minor_Ver   equ "p"
 Module_id   equ MTYP_CANCAB ; id to identify this type of module
 EVT_NUM     equ 0           ; Number of events
 EVperEVT    equ 0           ; Event variables per event
 NV_NUM      equ 0           ; Number of node variables  
+NODEFLGS  equ B'00000010'  ; Node flags  Consumer=No, Producer=Yes, FliM=No
 
-;test_ver equ 1     ; A test version not to be distributed - comment out for release versions
-;build_no equ 5     ; Displayed on LCD at startup for test versions only  
+;test_ver   equ 1     ; A test version not to be distributed - comment out for release versions
+build_no    equ 6     ; Displayed on LCD at startup for test versions only
 
 
 
@@ -194,6 +242,7 @@ NV_NUM      equ 0           ; Number of node variables
 LCD_PORT equ  PORTC
 LCD_EN   equ  1
 LCD_RS   equ  3
+MAX_FUN  equ    27
 
 
 ; definitions used by bootloader
@@ -269,7 +318,8 @@ LCD_RS   equ  3
   ENDC
   
   ; end of bootloader RAM
-  
+
+
   CBLOCK  0   ;file registers - access bank
           ;interrupt stack for low priority
           ;hpint uses fast stack
@@ -319,7 +369,7 @@ LCD_RS   equ  3
   Count2
   Keepcnt   ;keep alive counter
   Lat0count ;latency counter - transmit buffer 0
-    Lat1count   ;latency counter - transmit buffer 1
+        Lat1count       ;latency counter - transmit buffer 1
 
   Temp    ;temps
   Temp1
@@ -330,9 +380,9 @@ LCD_RS   equ  3
   Incount
   Input
   Atemp   ;port a temp value
-  Dlc     ;data length
+  Dlc   ;data length
 
-  Key     ;key number
+  Key   ;key number
   Key_temp  ;for debounce
   Debcount  ;debounce counter
   Keyflag   ;keyboard mode
@@ -518,6 +568,8 @@ LCD_RS   equ  3
   
   
   Eadr    ;temp eeprom address
+        Eval
+        Ecount
   
   Tx0con      ;start of transmit frame  0
   Tx0sidh
@@ -1247,7 +1299,7 @@ _CANSendBoot
     goto  hpint     ;high priority interrupt
     
     ORG   0810h     ;node type parameters
-node_ID db    Man_no, Minor_Ver, Module_id, EVT_NUM, EVperEVT, NV_NUM, Major_Ver
+node_ID db    Man_no, Minor_Ver, Module_id, EVT_NUM, EVperEVT, NV_NUM, Major_Ver, NODEFLGS
 
     ORG   0818h 
     goto  lpint     ;low priority interrupt
@@ -1260,7 +1312,7 @@ node_ID db    Man_no, Minor_Ver, Module_id, EVT_NUM, EVperEVT, NV_NUM, Major_Ver
 ;
 ;   high priority interrupt. Used for CAN receive and transmit error.
 
-hpint movff CANCON,TempCANCON
+hpint           movff CANCON,TempCANCON
     movff CANSTAT,TempCANSTAT
   
     movff FSR0L,Fsr_temp0L    ;save FSR0
@@ -1916,7 +1968,7 @@ frprog  btfss Progmode,0
     movf  Sermode,W
     call  eewrite
     call  newdisp
-    bra   keyback
+    bra keyback
 
 rel_mode  bcf Modstat,4   ;stop keepalive
     movlw 0x21    ;release handle
@@ -1926,16 +1978,19 @@ rel_mode  bcf Modstat,4   ;stop keepalive
     movwf Dlc
     call  sendTXa
     
-relloco movlw LOW E_hndle   ;clear handle in EEPROM
-    movwf EEADR
-    movlw 0xFF      ;no handle is 0xFF
-    call  eewrite
-    bcf   Locstat,0
-    bcf   Locstat,1
-    bcf   T0CON,TMR0ON    ;stop keepalive timer interrupts
+relloco         movlw LOW E_hndle   ;clear handle in EEPROM
+    movwf Eadr
+                movlw   4                      ; fill 4 bytes
+                movwf   Ecount
+    movlw 0xFF      ;no handle and invalid address is 0xFF
+    call  eefill
+ 
+    bcf Locstat,0
+    bcf Locstat,1
+    bcf T0CON,TMR0ON    ;stop keepalive timer interrupts
     call  clr_fun     ;clear function table
-    bcf   Datmode,6   ;not busy
-    bra   loco
+    bcf Datmode,6   ;not busy
+    bra loco
 
 con_mode call conconv
     sublw 0
@@ -2259,7 +2314,13 @@ packet  movlw 0x07      ;is it a reset frame
     subwf Rx0d0,W
     bz    rdpara
 
-    movlw 0x5C      ;reboot?
+    movlw OPC_QNN     ; Request node info
+    subwf Rx0d0,W
+    bnz   chkrb
+    call  sndinf      ; Send requested info   
+    bra   pktdun
+
+chkrb movlw 0x5C      ;reboot?
     subwf Rx0d0,W
     bz    reboot1         
 
@@ -2278,9 +2339,7 @@ othopc  btfsc Modstat,1   ;request handle response?
     bra   hand_set    ;do other frames here
     btfsc Modstat,2   ;handle check?
     bra   hand_set
-    bcf   Datmode,0
-    goto  main
-  
+    bra   pktdun
 
 est_pkt call  ems_mod     ; Put handset into emergency stop
     call  beep
@@ -2289,20 +2348,18 @@ est_pkt call  ems_mod     ; Put handset into emergency stop
     btfss Datmode,6   ; busy?
     call  ems_lcd     ; Display stop all
     bsf   Modstat,7   ; stop all flag 
-    bcf   Datmode,0   ; clear packet received flag
-    goto  main
+    bra   pktdun
 
 rdpara  call  thisNN      ;read parameter by index (added in rev y)
     sublw 0
-    bnz   notNN
+    bnz   pktdun
     call  para1rd
-    bcf   Datmode,0
-    goto  main
+    bra   pktdun
   
 
 reboot  call  thisNN        ;is it a CAB?
     sublw 0
-    bnz   notNN       ;no
+    bnz   pktdun      ;no
     movlw 0xFF
     movwf EEADR
     movlw 0xFF
@@ -2320,42 +2377,56 @@ reboot  call  thisNN        ;is it a CAB?
     call  lcd_str
     reset         ;software reset to bootloader
 
-notNN bcf   Datmode,0
+pktdun  bcf   Datmode,0     ; clear packet waiting flag
     goto  main
 
-re_set  bcf   PORTA,2     ;turn off red LED if on.
+re_set  bcf PORTA,2     ;turn off red LED if on.
     clrf  Modstat     ;for enumeration
     movlw LOW E_hndle   ;clear handle in EEPROM
-    movwf EEADR
+    movwf Eadr
+                movlw   4
+                movwf   Ecount
     movlw 0xFF
-    call  eewrite
+    call  eefill
     setf  Handle
   
 re_set3 goto  re_set1a      ;reinitialises handset
+re_set1g  goto  re_set1     ;Reset after handle doesn't match
     
 hand_set 
 
     movlw OPC_PLOC        
     subwf Rx0d0,W
-    bz    set1
+    bz  set1
     
-    bcf   Datmode,0
+    bcf Datmode,0
     goto  main
     
-set1  btfss Modstat,2     ;awaiting handle confirmation?
-    bra   set1a       ;no
-    movf  Handle,W
-    subwf Rx0d1,W       ;handle matches?
-    bnz   set1b       ;back
-    movff Rx0d2,Adr_hi    ;get old address  ??? need to store address in EEPROM and check matches after walkaround
-    movff Rx0d3,Adr_lo
-    call  adr_chr       ;set old address for display
-    call  setdir        ; Set direction flag and led
+set1    btfss Modstat,2   ;awaiting handle confirmation on walkabout?
+    bra   set1a     ;no
+    movf  Handle,W    ; Yes, get handle
+    subwf Rx0d1,W     ;handle matches?
+    bnz   re_set1g      ; no - reset handset
+            
+        movf    Adr_hi,w        ; address retrieved from EEPROM
+        subwf   Rx0d2,w         ; HIgh byte of address matches?
+        bnz     re_set1g        ; no - reset handset
 
-set2  movff Rx0d4,Speed1
-    bcf   Speed1,7      ;clear direction bit
-;   call  ss_send       ;send speed mode to CS
-    movlw LOW Ser_md + 1    ;recover SS mode
+        movf    Adr_lo,w        ; address retreived from EEPROM
+        subwf   Rx0d3,w         ; HIgh byte of address matches?
+        bnz   re_set1g        ; no - reset handset
+
+;   movff Rx0d2,Adr_hi    ;get old address  
+;   movff Rx0d3,Adr_lo
+    call  adr_chr     ;set old address for display
+    call  setdir      ; Set direction flag and led
+
+set2    movff Rx0d4,Speed1
+    bcf Speed1,7    ;clear direction bit
+;   call  ss_send     ;send speed mode to CS
+    movlw LOW Ss_md   ;recover SS mode
+
+
     movwf EEADR
     call  eeread
     movwf Smode
@@ -2380,16 +2451,23 @@ set2  movff Rx0d4,Speed1
     bra   set1b     ;no
 set1c call  em_sub
     bra   set1b   
-
     
-set1a movff Rx0d1,Handle    ;put in handle
-    movff Rx0d5,Fr1     ;reinstate functions
+set1a   movff Rx0d1,Handle    ;put in handle
+    movff Rx0d5,Fr1   ;reinstate functions
     movff Rx0d6,Fr2
     movff Rx0d7,Fr3
+        call    store_funcs             ; Store functions status in EEPROM
     movlw LOW E_hndle
     movwf EEADR
     movf  Rx0d1,W
+        call    eewrite
+        incf    EEADR
+    incf  EEADR
+        movf    Adr_hi,w
     call  eewrite
+        incf    EEADR
+        movf    Adr_lo,w
+        call    eewrite
     bcf   Modstat,1
     call  ss_send 
     movf  Rx0d4,w       ; Get speed
@@ -2406,24 +2484,26 @@ setspd  movwf Speed       ; else set speed to current loco speed
     call  loco_lcd
     bsf     Locstat,0
 
-set1b bsf   Modstat,4
-    bsf   T0CON,TMR0ON        ;start keepalive
+set1b   bsf   Modstat,4
+    bsf   T0CON,TMR0ON        ;start keepalive timer
     bcf   Datmode,0
+        call    spd_pkt                     ; Send 1 speed packet at take over
     goto  main    
 
 
 ;  Set direction flag and LED based on dirction in Rx0d4
 
-setdir  btfsc Rx0d4,7
+setdir          btfsc           Rx0d4,7
     bra   set_fwd
     bcf   Locstat,7     ;clear direction bit
     bcf   PORTA,1       ;set LED
     bsf   PORTA,2
-    bra   set2
-set_fwd bsf   Locstat,7
+    bra   dirret
+set_fwd         bsf   Locstat,7
     bcf   PORTA,2
     bsf   PORTA,1   
-    return
+dirret  return
+                
 
 
 ; Handle error opcode
@@ -2825,49 +2905,59 @@ clrstat clrf    POSTINC0        ; clear accessory status bytes
     clrf  Smode     ;default is 128 SS
     movlw 0x07
     subwf Rx0d0,W     ;is it a reset command
-    bz    re_set1b    ;always a hard reset
+    bz  re_set1b    ;always a hard reset
 
-    bcf   PORTC,7     ;for hard reset test. Is the Prog button in?
+    bcf PORTC,7     ;for hard reset test. Is the Prog button in?
     btfsc PORTB,5     ;clear if in
-    bra   re_set4
+    bra re_set4
 re_set1b  movlw LOW E_hndle   ;clear handle
-    movwf EEADR
+    movwf Eadr
+        movlw   4
+        movwf   Ecount
     movlw 0xFF
-    call  eewrite
+    call  eefill
     setf  Handle
-    bcf   Datmode,0
-    bra   re_set1     ;hard reset
+    bcf Datmode,0
+    bra re_set1     ;hard reset
     
 
 ;   test for walkaround
 ;   is handle already in the CS?
 
 re_set4 bsf   PORTC,7
-    bcf   PORTC,5     ;is consist in?
+    bcf PORTC,5     ;is consist in?
     btfsc PORTB,0
-    bra   re_set4a
+    bra re_set4a
     call  res_fun     ;reset all mom keys
-re_set4a  bsf   PORTC,5
+re_set4a  bsf PORTC,5
     movlw LOW E_hndle
     movwf EEADR
     call  eeread      ;is handle already set?
     movwf W_temp
-    addlw 1       ;was 0xFF?
-    bz    re_set1     ;CAB doesn't have a handle so hard reset
+    addlw 1     ;was 0xFF?
+    bz  re_set1     ;CAB doesn't have a handle so hard reset
 
 ;   here if handle is set in EEPROM
     
-    movff W_temp,Handle
+    movff W_temp,Handle           ; keep hadle to check against PLOC
+        movlw   LOW E_addr              ; Get saved address to check against PLOC
+        movwf   EEADR
+        call    eeread
+        movwf   Adr_hi
+        incf    EEADR
+        call    eeread
+        movwf   Adr_lo
+
     call  newid1      ;reinstate CANid to RAM etc. (current CANid in EEPROM)
     clrf  Modstat
-    bsf   Modstat,0   ;has got CAN_ID
+    bsf Modstat,0   ;has got CAN_ID
     movlw B'11100000'
     clrf  PIR3
     movwf INTCON      ;enable interrupts
 
-    bsf   Modstat,2   ;set flag for handle confirm
+    bsf Modstat,2   ;set flag for handle confirm
     clrf  Locstat     ;no loco selected
-    bsf   Locstat,7   ;default to forward   
+    bsf Locstat,7   ;default to forward   
     movlw 0x22      ;query engine (QLOC)
     movwf Tx1d0
     movff Handle,Tx1d1
@@ -2883,9 +2973,6 @@ re_set1 clrf  INTCON
     setf  Handle
     
     call  clr_fun         ;clear function table
-  
-  
-
     
     
     bsf   Locstat,7       ;set to forward
@@ -3015,22 +3102,21 @@ set3  clrwdt
 
 ; Send TXa entry point is used when called from the main program
 
-sendTXa lfsr  FSR0, Tx1con  
+sendTXa         lfsr  FSR0, Tx1con
     lfsr  FSR1, TXB1CON
     movff Dlc, Tx1dlc
-        movlw   .10
-        movwf   Lat1count
+                movlw   .10
+                movwf   Lat1count
     bra   sendTX
 
 ; Send TXi entry point is used when called from the LP ISR - Tx0dlc loaded by caller
 
-sendTXi lfsr  FSR0, Tx0con
+sendTXi         lfsr  FSR0, Tx0con
     lfsr  FSR1, TXB0CON
-        movlw   .10
-        movwf   Lat0count
-    
+                movlw   .10
+                movwf   Lat0count
 
-sendTX  clrf  INDF0     ; Tx?con    ;prevents false send if TXREQ is set by mistake
+sendTX          clrf  INDF0     ; Tx?con    ;prevents false send if TXREQ is set by mistake
 ;   movf  Dlc,W     ;get data length
 ;   movwf Tx1dlc
     movlw B'00001111'   ;clear old priority
@@ -3150,28 +3236,49 @@ eeread  bcf   EECON1,EEPGD  ;read a EEPROM byte, EEADR must be set before this s
     return
 
 ;**************************************************************************
-eewrite movwf EEDATA      ;write to EEPROM, EEADR must be set before this sub.
-    bcf   EECON1,EEPGD
-    bcf   EECON1,CFGS
-    bsf   EECON1,WREN
+;               Pass value to write in w (w is not preserved)
+;               Address to write to in EEADR
+;
+eewrite         movwf EEDATA              ;write to EEPROM, EEADR must be set before this sub.
+    bcf EECON1,EEPGD
+    bcf EECON1,CFGS
+    bsf EECON1,WREN
     movff INTCON,TempINTCON
-    clrf  INTCON  ;disable interrupts
+    clrf  INTCON              ;disable interrupts
     movlw 0x55
     movwf EECON2
     movlw 0xAA
     movwf EECON2
-    bsf   EECON1,WR
-eetest  btfsc EECON1,WR
-    bra   eetest
-    bcf   PIR2,EEIF
-    bcf   EECON1,WREN
-    clrf  PIR3          ;prevent recursive interrupts
+    bsf EECON1,WR
+eetest          btfsc EECON1,WR
+    bra eetest
+    bcf PIR2,EEIF
+    bcf EECON1,WREN
+    clrf  PIR3                ;prevent recursive interrupts
   
     movff TempINTCON,INTCON   ;reenable interrupts
     
     return  
     
 ;***************************************************************
+;       Fill bytes of EEPROM with a value
+;       Pass address in Eadr
+;       Pass byte count in EEcount
+;       pass value to fill with in w
+;
+eefill          lfsr    0,Eadr
+nxtfill         movff   POSTINC0,EEADR  ; EEPROM address to write to
+                movwf   POSTINC0        ; Save fill value
+                call    eewrite         ; Write byte
+                decf    POSTDEC0        ; dec the count
+                bz      filldun         ; finish when zero
+                movf    POSTDEC0,w      ; recover fill value
+                incf    INDF0           ; next address
+                bra     nxtfill
+filldun         return
+
+
+
 
 ;   key scanning routine
 
@@ -3411,7 +3518,7 @@ adrconv clrf  Adr_hi
     clrf  Adr_lo
     decf  FSR2L
     btfsc Numcount,2      ;4 digits?
-    bsf   Adr_hi,7      ;flag long address
+    bsf Adr_hi,7      ;flag long address
     movff POSTDEC2,Adr_lo   ;ones
     decf  Numcount,F
     bz    last_num
@@ -3995,7 +4102,7 @@ adr4    return          ;must be a digit in ones
 ;
 ;     send a speed change packet
 ;
-spd_pkt bcf   Datmode,2   ;clear speed change flag
+spd_pkt         bcf Datmode,2   ;clear speed change flag
     btfss Locstat,0   ;any loco selected?
 
     return
@@ -4177,7 +4284,7 @@ fr3   btfsc Fnmode,1
     addwf Key_temp,W
     movwf EEADR
     call  eeread
-;   movwf Funtemp
+    movwf Funtemp
     
     movlw 3
     movwf Tx1d2
@@ -4259,13 +4366,30 @@ out1  movff Handle,Tx1d1
 
 #endif
 
-fdisp   movlw 0x40      ; Position cursor start of line 2
+                ; Send CBUS event for function button pressed
+
+                movlw   OPC_ACON
+                btfss   Fn_temp,0
+                movlw   OPC_ACOF
+                movwf   Tx1d0
+                movff   NN_temph,Tx1d1
+                movff   NN_templ,Tx1d2
+                clrf    Tx1d3
+                movff   Fnum,Tx1d4
+                movlw   5
+                movwf   Dlc
+                call    sendTXa
+
+               ; Update display for function sendt
+
+
+fdisp           movlw 0x40      ; Position cursor start of line 2
     call  cur_pos
     movlw "F"       ; Display F for function
     call  lcd_wrt
-        movlw   0x03
+                movlw   0x03
     andwf Fnmode,W    ; Function range?
-    bz    fn_lo     ; Skip if range 0
+    bz  fn_lo     ; Skip if range 0
 
     movlw "1"       ; Display char for Range 1
     btfsc Fnmode,1    ; Range 2?
@@ -5064,7 +5188,7 @@ sm_inc    incf  Smode
 
 ;     set new SS on enter
 
-ss_set    movlw LOW Ser_md +1
+ss_set                  movlw LOW Ss_md
       movwf EEADR
       movf  Smode,W
       call  eewrite       ;save curent ss mode
@@ -5106,7 +5230,7 @@ parasend
     movwf Count
     bsf   EECON1,EEPGD
     
-para1 tblrd*+
+para1           tblrd*+
     movff TABLAT,POSTINC0
     decfsz  Count
     bra   para1
@@ -5190,7 +5314,7 @@ para1rd movlw OPC_PARAN
     movwf Tx1d0
     movlw LOW node_ID
     movwf TBLPTRL
-    movlw 8
+    movlw HIGH node_ID
     movwf TBLPTRH   ;relocated code
     decf  Rx0d3,W
     addwf TBLPTRL
@@ -5205,6 +5329,28 @@ para1rd movlw OPC_PARAN
     movff NN_templ,Tx1d2
     call  sendTXa
     return  
+
+;**********************************************************
+
+;   send node information
+
+sndinf  movlw OPC_PNN
+    movwf Tx1d0
+    movf  NN_temph,w
+    movwf Tx1d1
+    movf  NN_templ,w
+    movwf Tx1d2
+    movlw Man_no
+    movwf Tx1d3
+    movlw Module_id
+    movwf Tx1d4
+    movlw NODEFLGS
+    movwf Tx1d5
+    movlw 6
+    movwf Dlc
+    call  sendTXa
+    return
+
 
 ;*******************************************************
 
@@ -5328,7 +5474,7 @@ funback return
 ;*********************************************************
 ;   get function status from EEPROM
 
-get_fun movlw LOW Fn_stat
+get_fun         movlw LOW Fn_stat
     addwf Fnum,W
     movwf EEADR
     call  eeread
@@ -5338,7 +5484,7 @@ get_fun movlw LOW Fn_stat
 ;
 ;   set function status in EEPROM
 ;
-set_fun movwf Temp    ;save fn byte
+set_fun         movwf Temp    ;save fn byte
     movlw LOW Fn_stat
     addwf Fnum,W
     movwf EEADR
@@ -5347,7 +5493,44 @@ set_fun movwf Temp    ;save fn byte
     return
 
 ;***********************************************************
-    
+;
+;           Store all functions on/off status from Frx bytes
+;           Used to save status from PLOC packet
+;
+store_funcs     lfsr    0,Fr1
+                clrf    Fnum
+
+nxt_fun         clrwdt
+                call    get_fun
+                movwf   Temp
+                movlw   LOW Fnbits1
+                addwf   Fnum,w
+                movwf   EEADR
+                call    eeread
+                andwf   INDF0,w
+                bz      off_fun
+                bsf     Temp,0
+                bra     sav_fun
+off_fun         bcf     Temp,0
+sav_fun         movf    Temp,w
+                call    set_fun
+
+                incf    Fnum
+                movlw   13
+                subwf   Fnum,w
+                bz      stordun
+                movlw   5
+                subwf   Fnum,w
+                bz      incfr
+                movlw   9
+                subwf   Fnum,w
+                bnz     nxt_fun
+
+incfr           incf    FSR0
+                bra     nxt_fun
+
+stordun         return
+  
 ;
 ;   set / clear momentary action for FN butons
 ;   only valid for FNs 0 to 12 (the refreshed ones)
@@ -5429,20 +5612,20 @@ momset  ;movlw  .13       ;only FNs 0 to 12 can be set for mom.
     ;subwf  Fnum,W
   ; bn    mom1
   ; bra   no_set
-mom1  movlw LOW Fn_stat
+mom1            movlw LOW Fn_stat
     addwf Fnum,W      ;point to EEPROM for status
     movwf EEADR
     call  eeread
     movwf Fn_temp
     btfsc Fn_temp,1
-    bra   is_tog
-    bsf   Fn_temp,1
+    bra is_tog
+    bsf Fn_temp,1
     movf  Fn_temp,W
     call  eewrite     ;change to mom
     movlw 0x44
     call  cur_pos
     btfss Fn_temp,0   ;on?
-    bra   mom2
+    bra mom2
     movlw HIGH Mom_onstr
     movwf TBLPTRH
     movlw LOW Mom_onstr
@@ -5475,7 +5658,7 @@ clr_fun1  clrwdt
     bcf   WREG,0
     call  eewrite
     incf  EEADR,F
-    movlw LOW Fn_stat +.29
+    movlw LOW Fn_stat_lst
     cpfslt  EEADR
     return
     bra   clr_fun1
@@ -5487,7 +5670,7 @@ res_fun1
     movlw 0
     call  eewrite
     incf  EEADR,F
-    movlw LOW Fn_stat +.29
+    movlw LOW Fn_stat_lst
     cpfslt  EEADR
     return
     bra   res_fun1
@@ -5524,12 +5707,14 @@ ldely1  call  dely
 ; LCD Text strings were declared here, now moved to include file
 
 ;************************************************************************   
-  ORG 0xF00000      ;EEPROM data. Defaults
+    ORG 0xF00000      ;EEPROM data. Defaults
   
 CANid de  B'01111111',0 ;CAN id default 
-NodeID  de  0xFF,0xFF   ;Node ID. CAB default is 0xFFFF
-E_hndle de  0xFF,0      ;saved handle. default is 0xFF
-Ser_md  de  0,0       ;program / read mode and service mode
+NodeID  de  0xFF,0xFF ;Node ID. CAB default is 0xFFFF
+E_hndle de  0xFF,0    ;saved handle. default is 0xFF
+E_addr  de      0,0             ; Saved loco address during walkabout to check when reconnecting
+Ser_md  de  0         ;program / read mode
+Ss_md   de      0               ;service mode
 
 ;key number conversion
 
@@ -5550,26 +5735,33 @@ Keytbl  de  0x0A,1    ;DIR, 1
 
 ; Function bits lookup
 
-Fnbits1 de  B'00010000',B'00000001'
+Fnbits1         de  B'00010000',B'00000001'
     de  B'00000010',B'00000100'
     de  B'00001000',B'01000001'
     de  B'01000010',B'01000100'
     de  B'01001000',B'10000001'
 
-Fnbits2 de  B'10000010',B'10000100'
+Fnbits2         de  B'10000010',B'10000100'
     de  B'10001000',0xFF
 
-Fnbits3 de  B'00000001',B'00000010'
+Fnbits3         de  B'00000001',B'00000010'
     de  B'00000100',B'00001000'
     de  B'00010000',B'00100000'
     de  B'01000000',B'10000000'
 
-Fnbits4 de  B'00000001',B'00000010'
+Fnbits4         de  B'00000001',B'00000010'
     de  B'00000100',B'00001000'
     de  B'00010000',B'00100000'
     de  B'01000000',B'10000000'
 
-Fn_stat de  0,0   ;function status. 
+
+; Status of each function is held EEPROM
+; 1 byte for each function
+;   Bit 0 - Set if function is on
+;   Bit 1 - Set if momentary
+
+
+Fn_stat         de  0,0   ;function status.
     de  0,0
     de  0,0
     de  0,0
@@ -5583,7 +5775,9 @@ Fn_stat de  0,0   ;function status.
     de  0,0
     de  0,0
     de  0,0
-    de  0,0
+Fn_stat_lst de  0,0
+
+
 
   ORG 0xF000FE
 

@@ -1,9 +1,11 @@
 ;
 ; Text strings for use on CANCAB LCD display 
 ;
-; Version 2l - American English   2nd May 2011 - Pete Brownlow
+; American English   2nd May 2011 - Pete Brownlow
 ;
-; Use with CANCAB firmware version 2d onwards
+; Version 2p - 12 Feb 2012 - Some changes in length, mom strings added
+
+; Use with CANCAB firmware version 2p onwards
 ; 
 ;
 ; LCD display width is 8 characters.
@@ -147,7 +149,6 @@ Firmstr db  "Firmware",0            ; 8   Displayed during boot load
 Updstr  db  "Update",0,0,0            ; 8   Displayed during boot load
 Mom_onstr db  "Mom+",0            ; 4   Momentary on. used for Fn keys
 Mom_ofstr db  "Mom-",0            ; 4   Momentary off
-
 
 ;***************************************************************************************************
 ;
