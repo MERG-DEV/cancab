@@ -1,17 +1,19 @@
 ;     TITLE   "Source for DCC CAB for CBUS"
-; filename cancab2a.asm 28/3/11
+; 
 ; 
 ; Uses 4 MHz resonator and PLL for 16 MHz clock
-; This is basic CAB with OTM programming, one speed knob and self enum for CAN_ID
+; CAB with OTM and service mode programming, one speed knob and self enum for CAN_ID
 
-; Em. Stop facility
+; Emergency Stop and Emergency Stop all facility
 ; Includes Consist setting and clearing.
 ; Ability to set long address into loco in one instruction.
-; Has no node number facility.
-
+; Walkaround facility
+; Firmware updatable over CBUS (using FCU)
+; Has no node number facility yet. 
 
 ; Drives an 8 char by 2 line display (Everbouquet MC0802A used in prototype but protocol is standard for most displays)
 ; Use command station firmware cancmd_n or later for full functionality of emergency stop all
+; Use command station firmware cancmd3b or later for correct service mode programming of all decoders
 
 
 ; The setup timer is TMR3. 
@@ -85,6 +87,11 @@
 ; Rev 2b 8/4/11   PNB - Fixed displaying prog or read correctly (but introduced when making read the default in ver 2a)
 ;             Fixed blank screen when turning knob to zero during emergency stop all with no loco selected (now displays loco prompt)
 ;             Loco prompt now a separate subroutine
+; Rev 2c 29/4/11    PNB - Changed strings to null terminated (so msbit set chars can be used - required for some languages)
+;                         String table can now exceed 255 bytes (lcd_str changed)
+;             String table now a separate include file
+;             Custom character table added which is loaded into the LCD CG RAM at startup, default is French chars with accents
+;             When built as a test version (uncomment test_ver below), press Prog when no loco to display custom chars
 
 
 ; 
@@ -96,19 +103,20 @@
   ;definitions  Change these to suit hardware.
 
   include "cbuslib/cbusdefs.inc"  
+  include "cabmessages.inc"
 
 ; Define the node parameters to be stored at node_id
 
 Man_no      equ MANU_MERG ;manufacturer number
 Major_Ver equ 2 
-Minor_Ver equ "b"   
+Minor_Ver equ "c"   
 Module_id   equ MTYP_CANCAB ; id to identify this type of module
 EVT_NUM     equ 0           ; Number of events
 EVperEVT    equ 0           ; Event variables per event
 NV_NUM      equ 0           ; Number of node variables  
 
 ; test_ver  equ 1     ; A test version not to be distributed - comment out for release versions
-build_no  equ 3     ; Displayed on LCD at startup for test versions only  
+build_no  equ 1     ; Displayed on LCD at startup for test versions only  
 
 
 
@@ -307,6 +315,7 @@ LCD_RS   equ  3
         ;bit 6  program mode
         ;bit 7  is direction, 1 is foward
 
+  
   Char    ;store char for LCD
   Adr1    ;ASCII address
   Adr2
@@ -392,12 +401,16 @@ LCD_RS   equ  3
   L_adr3
   L_adr4
   
+  Setupmode ; Status of setup mode
+        ;bit 0  In setup mode
+
+  TststrL   ; Address of current test string
+    TststrH   ;
+
+
           ;the above variables must be in access space (00 to 5F)
         
-  
-
-  
-  
+    
   Rx0con      ;start of receive packet 0
   Rx0sidh
   Rx0sidl
@@ -1426,11 +1439,15 @@ keyup2  bcf   Locstat,3
     bra   fr2lbl
     call  lcd_clr
     call  loco_lcd
+    movlw HIGH Fr1lbl
+    movwf TBLPTRH           
     movlw LOW Fr1lbl  
     call  lcd_str
     goto  main
 fr2lbl  call  lcd_clr
     call  loco_lcd
+    movlw HIGH Fr2lbl
+    movwf TBLPTRH           
     movlw LOW Fr2lbl
     call  lcd_str
     goto  main  
@@ -1548,6 +1565,8 @@ clear bsf   Locstat,1
     call  lcd_home
     call  loco_lcd
     call  lcd_cr
+    movlw HIGH Relstr
+    movwf TBLPTRH           
     movlw LOW Relstr
     call  lcd_str
     bra   keyback
@@ -1561,6 +1580,8 @@ locdisp call  lcd_clr     ; clear lcd
     call  loco_lcd    ; displly speed info
     btfss Locstat,4   ; Waiting for zero after stop?
     bra   keyback
+    movlw HIGH Stopstr
+    movwf TBLPTRH           
     movlw LOW Stopstr   ; If so, reinstate stop message
     call  lcd_str
     bra   keyback
@@ -1613,6 +1634,8 @@ fr1   btfsc Progmode,4    ;service mode?
     bra   keyback
 setfr1  bsf   Fnmode,0
     bcf   Fnmode,1
+    movlw HIGH Fr1lbl
+    movwf TBLPTRH           
     movlw LOW Fr1lbl
     call  lcd_str
     bra   keyback
@@ -1691,6 +1714,8 @@ fr2   btfsc Progmode,4    ;service mode?
     bra   keyback
 setfr2  bsf   Fnmode,1
     bcf   Fnmode,0
+    movlw HIGH Fr2lbl
+    movwf TBLPTRH           
     movlw LOW Fr2lbl
     call  lcd_str
     bra   keyback
@@ -1710,7 +1735,7 @@ frprog2 btfss Progmode,0
 prog  bcf   Sermode,5
     movlw B'01011001'   ;mask dir bit, release bit and consist set bit
     andwf Locstat,W   ;any loco selected?
-    bz    no_prog     ;no
+    bz    setup_mode    ;no - so into handset setup mode
     bsf   Locstat,6
     call  prog_sub
 no_prog   bra   keyback
@@ -1761,7 +1786,7 @@ cvnum1  subwf Numcount,W
     movf  Char,W
     call  lcd_wrt
     bra   keyback
-    
+
 funct btfsc Locstat,1   ;release mode?
     bra   keyback
     btfsc Locstat,2
@@ -1794,11 +1819,50 @@ cvval1  subwf Numcount,W
     call  lcd_wrt
     bra   nonum
 
+
 ; these are because branches were too long
 
 serr1 goto  serr
 rd_back1 goto   rd_back
 reboot1 goto  reboot    
+
+
+; Handset setup mode
+;
+; For now - a test of characters in display CGRAM
+
+setup_mode
+    
+#ifndef test_ver
+    bra   keyback     ; Do nothing if not testing
+#endif
+    call  lcd_clr 
+    movlw HIGH Testing
+    movwf TBLPTRH           
+    movlw LOW Testing
+    call  lcd_str 
+    call  lcd_cr
+    movf  Setupmode,w
+        bnz   nxtstr
+
+frststr movlw HIGH Teststr  ; point at first string
+        movwf TststrH
+    movlw LOW Teststr
+        movwf TststrL
+    bra   disptst
+
+nxtstr  movlw .10     ; next string
+    addwf TststrL
+    movlw LOW TeststEnd   
+    cpfslt  TststrL   ; at end of list?
+    bra   frststr
+
+disptst movff TststrH,TBLPTRH
+    movf  TststrL,w
+    call  lcd_str 
+    bsf   Setupmode,0 ; flag in setup mode
+    bra   keyback
+
 
 ;   here if any CAN frames received   
 
@@ -1973,11 +2037,15 @@ err_0 movf  Adr_hi,W
     bz    err_2
     bra   err_5
 err_1 call  loc_adr       ;loco number on top line
-    movlw LOW Str_ful     ;"FULL"
     call  beep
+    movlw HIGH Str_ful
+    movwf TBLPTRH          
+    movlw LOW Str_ful     ;"FULL"
     call  lcd_str
     bra   err_4
 err_2 call  loc_adr
+    movlw HIGH Str_tkn
+    movwf TBLPTRH          
     movlw LOW Str_tkn     ;"TAKEN"
     call  lcd_str
     call  beep
@@ -2240,18 +2308,44 @@ mskloop clrf  POSTINC0
     bcf   LCD_PORT,LCD_RS ;control register
     movlw B'00110011'   ;reset and 4 bit mode
     call  lcd_wrt
-    movlw B'00110010'
+    movlw B'00110010'   ;reset and 4 bit mode sequence
     call  lcd_wrt
-    movlw B'00101000'
+    movlw B'00101000'   ;2 lines, 5x7 dots
     call  lcd_wrt
-    movlw B'00000110'
+    movlw B'00000110'   ;Cursor left to right, don't shift display
     call  lcd_wrt
-    movlw B'00001100'
+    movlw B'00001100'   ;Display on, cursor off, blink at cursor off
     call  lcd_wrt
-    movlw B'00000001'   ;clear display
+    movlw B'00000001'   ;clear display, start at DD address 0
     call  lcd_wrt
 
+
+; Download custom characters to LCD CG RAM
+
+    movlw B'01000000'   ; Set CG RAM address 0
+    movwf Temp1     ; Save Initial CG RAM address
+    movlw HIGH Custchars  ; Set up table pointer for character data to load
+    movwf TBLPTRH          
+    movlw LOW Custchars
+    movwf TBLPTRL
+
+loadCG  bcf   LCD_PORT,LCD_RS ; LCD into command mode
+    movf  Temp1,w     ; Get CG RAM address
+    call  lcd_wrt     ; Set CG RAM address in LCD
+
+    bsf   LCD_PORT,LCD_RS ; LCD into data mode
+    tblrd*+         ; get next row of pixels
+    movf  TABLAT,W
+    call  lcd_wrt
+    incf  Temp1,F     ; next address
+    movlw LOW Custend
+    cpfseq  TBLPTRL     ; All loaded?
+    bra   loadCG
     
+    bcf   LCD_PORT,LCD_RS ; LCD into command mode
+    movlw B'10000000'   ; Back to Data display RAM mode, address 0
+    call  lcd_wrt
+    bsf   LCD_PORT,LCD_RS ; LCD ready to accept display characters
 
 ;clear variables
 
@@ -2262,6 +2356,7 @@ re_set1a  clrf  Tx1con    ;make sure Tx1con is clear
     clrf  Progmode
     clrf  Modstat     ;re enumerate on enter
     clrf  Sermode
+    clrf  Setupmode
     lfsr  FSR2,Num1     ;reset pointer
     movlw " "
     movwf Adr1
@@ -2334,10 +2429,14 @@ re_set1 clrf  INTCON
     call  lcd_clr
     bsf   LCD_PORT,LCD_RS
 ;   movlw LOW Selstr
+    movlw HIGH Titlstr
+    movwf TBLPTRH          
     movlw LOW Titlstr
     call  lcd_str
     call  lcd_cr
     bsf   LCD_PORT,LCD_RS
+    movlw HIGH Verstr
+    movwf TBLPTRH          
     movlw LOW Verstr
     call  lcd_str
         movlw   Major_Ver           ; Show major version number
@@ -2397,6 +2496,8 @@ locprmpt
     call  lcd_clr
     call  lcd_home
     bsf   LCD_PORT,LCD_RS   
+    movlw HIGH Selstr
+    movwf TBLPTRH          
     movlw LOW Selstr      ;
     call  lcd_str
     call  lcd_cr
@@ -2723,32 +2824,29 @@ lcd_clr bcf   LCD_PORT,LCD_RS   ;control register
 ;******************************************************************************
 ;
 ;   LCD write string  load W with start of string in EEPROM
-;       end of string indicated by bit 7 set
+;       end of string indicated by null character 
+;      Changed from bit 7 set termination so bit 7 set chars can be embedded in strings
+;      TBLPTRH must be set up with msbyte of string address
+;      Pass LS Byte of string address in w
+
+
 ;
 lcd_str bsf   LCD_PORT,LCD_RS   ;data register
     movwf TBLPTRL
-    movlw 0x30
-    movwf TBLPTRH
+;   movlw 0x30
+;   movwf TBLPTRH             ; now set by caller, not assumed to be 0x30 to remove 255 byte table limit
     bsf   EECON1,EEPGD
     
 str1  tblrd*+
     movf  TABLAT,W
-    btfsc WREG,7
-    bra   str2
+    bz      lcd_str_ret
     call  lcd_wrt
     bra   str1
   
-str2  bcf   WREG,7
-    call  lcd_wrt
+lcd_str_ret
     bcf   EECON1,EEPGD  
   
     return
-
-
-
-
-
-
 
 
 ;********************************************************************
@@ -3039,16 +3137,23 @@ err_msg ; call  beep
       subwf Err_tmp,W
       bz    over_rng
       return
-no_ack    movlw LOW No_ack
+
+no_ack    movlw HIGH No_ack
+      movwf TBLPTRH          
+      movlw LOW No_ack
       call  lcd_str
       call  beep
       bsf   Sermode,5
       return
-over_ld   movlw LOW Over_ld
+
+over_ld   movlw HIGH Over_ld
+      movwf TBLPTRH
+          movlw LOW Over_ld
       call  lcd_str
       call  beep
       bsf   Sermode,5
       return
+
 ack_ok    call  lcd_clr
       movlw B'00000011'
       andwf Sermode,W
@@ -3063,7 +3168,9 @@ ack_ok    call  lcd_clr
       movlw "g"   
       call  lcd_wrt
       bra   ack_ok2
-ack_ok3   movlw LOW Address
+ack_ok3   movlw HIGH Address
+      movwf TBLPTRH          
+      movlw LOW Address
       call  lcd_str
       call  lcd_cr
       movlw "="
@@ -3076,6 +3183,8 @@ ack_ok3   movlw LOW Address
       call  lcd_wrt
       movlw " "
       call  lcd_wrt
+      movlw HIGH Ack_OK
+      movwf TBLPTRH          
       movlw LOW Ack_OK
       call  lcd_str
       call  beep
@@ -3100,17 +3209,23 @@ ack_ok2   movlw " "
       call  cvv_disp
       movlw " "
       call  lcd_wrt
+      movlw HIGH Ack_OK
+      movwf TBLPTRH          
       movlw LOW Ack_OK
       call  lcd_str
       call  beep
       bsf   Sermode,5
       return
-busy    movlw LOW Busy
+busy    movlw HIGH Busy
+      movwf TBLPTRH          
+      movlw LOW Busy
       call  lcd_str
       call  beep
       bsf   Sermode,5
       return
-over_rng  movlw LOW Err
+over_rng  movlw HIGH Err
+      movwf TBLPTRH          
+      movlw LOW Err
       call  lcd_str
       call  beep
       bsf   Sermode,5
@@ -3157,22 +3272,33 @@ newdisp   clrf  CVnum1
       movlw LOW Ser_md
       movwf EEADR
       call  eeread
-      mullw 8
+      mullw .10
+      movlw HIGH Pmode1
+      movwf TBLPTRH          
       movf  PRODL,W
       addlw LOW Pmode1    ;prompt for CV value
       call  lcd_str
       call  lcd_cr
       btfsc Sermode,1
       bra   regdisp
+
+      movlw HIGH CV_equ
+      movwf TBLPTRH          
       movlw LOW CV_equ
       call  lcd_str
       return
 regdisp   btfsc Sermode,0
       bra   adrdisp
+
+      movlw HIGH REG_equ
+      movwf TBLPTRH          
       movlw LOW REG_equ
       call  lcd_str
       return
-adrdisp   movlw LOW ADR_equ
+
+adrdisp   movlw HIGH ADR_equ
+      movwf TBLPTRH          
+      movlw LOW ADR_equ
       call  lcd_str
       return      
 
@@ -3486,7 +3612,9 @@ fnframe movlw 0x60      ;function frame
     movf  Fnmode,F
     bz    fn_lo
     bra   fn_hi1
-fn_lo movlw LOW Fnumstr
+fn_lo movlw HIGH Fnumstr
+    movwf TBLPTRH          
+    movlw LOW Fnumstr
     call  lcd_str
     movf  Key_temp,W
     addlw 0x30
@@ -3494,6 +3622,8 @@ fn_lo movlw LOW Fnumstr
     return
 fn_hi1  btfsc Fnmode,1
     bra   fn_hi2
+    movlw HIGH Fr1lbl
+    movwf TBLPTRH          
     movlw LOW Fr1lbl
     call  lcd_str
     movlw "F"
@@ -3505,7 +3635,9 @@ fn_hi1  btfsc Fnmode,1
     call  lcd_wrt
     return
 
-fn_hi2  movlw LOW Fr2lbl
+fn_hi2  movlw HIGH Fr2lbl
+    movwf TBLPTRH          
+    movlw LOW Fr2lbl
     call  lcd_str
     movlw "F"
     call  lcd_wrt
@@ -3524,6 +3656,8 @@ conset  bcf   Locstat,5     ;clear if in con clear
     bra   con1
 con2  call  lcd_clr       ;set a consist
     call  lcd_home
+    movlw HIGH Constr
+    movwf TBLPTRH          
     movlw LOW Constr
     call  lcd_str       ;consist string
     call  lcd_cr
@@ -3546,9 +3680,13 @@ con1  clrf  Con1        ;clear old consist (may not be needed)
 ;
 conclear call lcd_clr       ;set a consist
     call  lcd_home
+    movlw HIGH Constr
+    movwf TBLPTRH          
     movlw LOW Constr
     call  lcd_str       ;consist string
     call  lcd_cr
+    movlw HIGH Conclr
+    movwf TBLPTRH          
     movlw LOW Conclr
     call  lcd_str
     bcf   Locstat,0
@@ -3633,9 +3771,13 @@ prog_sub  clrf  Numcount
 prog_4    btfsc Progmode,4    ;service mode?
       bra   prog_4a
       call  lcd_clr
+      movlw HIGH Progstr1
+      movwf TBLPTRH          
       movlw LOW Progstr1
       call  lcd_str
       call  lcd_cr
+      movlw HIGH Str_equ
+      movwf TBLPTRH          
       movlw LOW Str_equ
       call  lcd_str
       lfsr  FSR2,CVnum1   ;get CV number
@@ -3648,9 +3790,13 @@ prog_1    btfsc Progmode,4    ;service?
       bcf   Progmode,0
       bsf   Progmode,1
       call  lcd_clr
+      movlw HIGH Progstr2
+      movwf TBLPTRH          
       movlw LOW Progstr2
       call  lcd_str
       call  lcd_cr
+      movlw HIGH Str_equ
+      movwf TBLPTRH          
       movlw LOW Str_equ
       call  lcd_str
       lfsr  FSR2,L_adr1
@@ -3665,9 +3811,13 @@ prog_2    btfss Progmode,1
 prog_3    btfsc Progmode,4    ;service?
       bra   prog_3a
       call  lcd_clr
+      movlw HIGH Progstr3
+      movwf TBLPTRH          
       movlw LOW Progstr3  ;prompt for CV value
       call  lcd_str
       call  lcd_cr
+      movlw HIGH Str_equ
+      movwf TBLPTRH          
       movlw LOW Str_equ
       call  lcd_str
       lfsr  FSR2,CVval1
@@ -3685,7 +3835,9 @@ prog_3a   ;call newdisp
       bra   prog_3c
       call  send_adr      
       return
-prog_3b   movlw LOW Prog_CV
+prog_3b   movlw HIGH Prog_CV
+      movwf TBLPTRH          
+      movlw LOW Prog_CV
       call  lcd_str
 prog_3d   call  lcd_cr
       call  cv_disp
@@ -3695,7 +3847,9 @@ prog_3d   call  lcd_cr
       bcf   Progmode,2
       bsf   Progmode,3
       return
-prog_3c   movlw LOW Pmode3
+prog_3c   movlw HIGH Pmode3
+      movwf TBLPTRH
+      movlw LOW Pmode3
       call  lcd_str
       bra   prog_3d
 
@@ -3740,9 +3894,13 @@ prog_5    bsf   Progmode,4    ;service mode
       call  eewrite
 
       call  lcd_clr
+      movlw HIGH Rmode1
+      movwf TBLPTRH          
       movlw LOW Rmode1    ;prompt for CV value
       call  lcd_str
       call  lcd_cr
+      movlw HIGH CV_equ
+      movwf TBLPTRH          
       movlw LOW CV_equ
       call  lcd_str
       lfsr  FSR2,CVnum1   ;get CV number
@@ -3895,6 +4053,8 @@ ems_mod btfss Locstat,0 ; valid loco?
     movlw 1     
     movwf Speed1
     call  spd_pkt
+    movlw HIGH Stopstr
+    movwf TBLPTRH          
     movlw LOW Stopstr
     call  lcd_str
 ;   call  adc_zero    ;wait for speed to be zero
@@ -3912,7 +4072,9 @@ ems_lcd call  lcd_clr     ; Enter here just to display stop all message
     call  lcd_cr      ; else just move to bottom line
     bra   emsdisp
 emsloco call  loco_lcd  
-emsdisp movlw LOW EmStopstr ; Display STOP ALL message
+emsdisp movlw HIGH EmStopstr
+    movwf TBLPTRH          
+    movlw LOW EmStopstr ; Display STOP ALL message
         call  lcd_str
     return
 
@@ -4166,27 +4328,39 @@ ss_mode1  movlw 0
       return        ;invalid value
 
 sm128   call  lcd_clr
+      movlw HIGH Selstep
+      movwf TBLPTRH          
       movlw LOW Selstep
       call  lcd_str
       call  lcd_cr
+      movlw HIGH Str128
+      movwf TBLPTRH          
       movlw LOW Str128
       call  lcd_str
       
       return
 
 sm14    call  lcd_clr
+      movlw HIGH Selstep
+      movwf TBLPTRH          
       movlw LOW Selstep
       call  lcd_str
       call  lcd_cr
+      movlw HIGH Str14
+      movwf TBLPTRH          
       movlw LOW Str14
       call  lcd_str
     
       return
 
 sm28    call  lcd_clr
+      movlw HIGH Selstep
+      movwf TBLPTRH          
       movlw LOW Selstep
       call  lcd_str
       call  lcd_cr
+      movlw HIGH Str28
+      movwf TBLPTRH          
       movlw LOW Str28
       call  lcd_str
       
@@ -4306,10 +4480,14 @@ here2   movlw .99         ;limit to ID
 segful    movlw 0xFF      ;default ID unallocated
       movwf IDcount
       call  lcd_clr
+      movlw HIGH Segful
+      movwf TBLPTRH          
       movlw LOW Segful
       movwf TBLPTRL
       call  lcd_str
       call  lcd_cr
+      movlw HIGH Str_ful
+      movwf TBLPTRH          
       movlw   LOW Str_ful
       movwf TBLPTRL
       call  lcd_str
@@ -4368,52 +4546,7 @@ ldely1  call  dely
 
 ;************************************************************************
 
-  org 0x3000
-
-  ; LCD text strings
-
-
-Titlstr db  "M","E","R","G"," ","C","A",0xC2
-Verstr  db  "V","e","r",0xA0
-Selstr  db  "S","E","L",".","L","O","C",0xCF
-Selstep db  "S","E","L",".","S","T","E",0xD0
-Stopstr db  "S","T","O","P",0xA1
-EmStopstr db "S","T","O","P",0x20,"A","L",0xCC
-Relstr  db  "R","E","L","E","A","S","E",0xBF
-Fr1lbl  db  "F","r","1"," ",0xA0
-Fr2lbl  db  "F","r","2"," ",0xA0
-Fnumstr db  " "," "," "," "," ",0xC6
-Constr  db  "C","o","n","s","i","s",0xF4
-Conclr  db  "c","l","e","a","r",0xBF
-Progstr1 db "C","V","n","u","m","b","e",0xF2
-Progstr2 db "L","o","n","g"," ","A","d",0xF2
-Progstr3 db "C","V"," ","V","a","l","u",0xE5
-Str_equ db  "=",0xA0
-CV_equ  db  "C","V","=",0xA0
-REG_equ db  "R","e","g","=",0xA0
-ADR_equ db  "A","d","r","=",0xA0
-Str_tkn db  "T","A","K","E",0xCE
-Str_ful db  "F","U","L",0xCC
-Prog_CV db  "P","r","o","g",0x20,"C",0xD6
-Pmode1  db  "P","r","o","g",0x20,"D","i",0xF2
-Pmode2  db  "P","r","o","g",0x20,"P","a",0xE7
-Pmode3  db  "P","r","o","g",0x20,"R","e",0xE7
-Pmode4  db  "P","r","o","g",0x20,"A","d",0xF2
-Rmode1  db  "R","e","a","d",0x20,"D","i",0xF2
-Rmode2  db  "R","e","a","d",0x20,"P","a",0xE7
-Rmode3  db  "R","e","a","d",0x20,"R","e",0xE7
-Rmode4  db  "R","e","a","d",0x20,"A","d",0xF2
-No_ack  db  "N","o",0x20,"A","c",0xEB
-Over_ld db  "O","v","e",0xF2
-Ack_OK  db  "O",0xCB
-Busy  db  "B","u","s",0xF9
-Err   db  "E","r","r","o",0xF2
-Address db  "A","d","d","r","e","s",0xF3
-Str128  db  "s","1","2","8",0xA0
-Str28 db  "s","2","8"," ",0xA0
-Str14 db  "s","1","4"," ",0xA0
-Segful  db  "S","e","g","m","e","n",0xF4
-
+; LCD Text strings were declared here, now moved to include file
 
 ;************************************************************************   
   ORG 0xF00000      ;EEPROM data. Defaults
