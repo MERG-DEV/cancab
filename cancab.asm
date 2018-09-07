@@ -92,7 +92,11 @@
 ;             String table now a separate include file
 ;             Custom character table added which is loaded into the LCD CG RAM at startup, default is French chars with accents
 ;             When built as a test version (uncomment test_ver below), press Prog when no loco to display custom chars
-
+; Rev2d 2/5/11    PNB - String table now uses db "string" rather than db "s","t","r","i","n","g" for better readability
+;             Messages added for all features on wishlist, so language files will not be obsoleted as features are implemented
+;             Service mode messages moved to start of table, so no risk of them wrapping around 256 byte boundary as messages added.
+;             Better instructions in cabmessages.inc for those doing translations.
+;             Test mode sequences through all messages 
 
 ; 
 ; Assembly options
@@ -109,14 +113,14 @@
 
 Man_no      equ MANU_MERG ;manufacturer number
 Major_Ver equ 2 
-Minor_Ver equ "c"   
+Minor_Ver equ "d"   
 Module_id   equ MTYP_CANCAB ; id to identify this type of module
 EVT_NUM     equ 0           ; Number of events
 EVperEVT    equ 0           ; Event variables per event
 NV_NUM      equ 0           ; Number of node variables  
 
 ; test_ver  equ 1     ; A test version not to be distributed - comment out for release versions
-build_no  equ 1     ; Displayed on LCD at startup for test versions only  
+build_no  equ 6     ; Displayed on LCD at startup for test versions only  
 
 
 
@@ -402,7 +406,8 @@ LCD_RS   equ  3
   L_adr4
   
   Setupmode ; Status of setup mode
-        ;bit 0  In setup mode
+        ;bit 0  Prog pressed oncde for setup mode
+                ;bit 1  Prog pressed again - now in setup mode
 
   TststrL   ; Address of current test string
     TststrH   ;
@@ -1521,6 +1526,7 @@ cons1 bcf   Locstat,2
 
 loco  clrf  Progmode
     clrf  Sermode 
+        clrf    Setupmode
     clrf  Fnmode  
     btfsc Locstat,0     ;any loco set?
     bra   locset
@@ -1829,39 +1835,54 @@ reboot1 goto  reboot
 
 ; Handset setup mode
 ;
-; For now - a test of characters in display CGRAM
+; Two presses of Prog whilst no loco controlled to get into setup mode
+;   For now - a test of all message strings
 
 setup_mode
-    
-#ifndef test_ver
-    bra   keyback     ; Do nothing if not testing
-#endif
+        btfsc   Setupmode,1     ; if already in test mode
+        bra   nxtstr      ; straight on with next string
+        btfsc   Setupmode,0     ; Prog already pressed once?
+        bra     setup_start     ; yes - this is second press so now in setup mode
+        bsf     Setupmode,0
+        bra     keyback
+
+setup_start
+        bsf     Setupmode,1
     call  lcd_clr 
     movlw HIGH Testing
     movwf TBLPTRH           
     movlw LOW Testing
     call  lcd_str 
     call  lcd_cr
-    movf  Setupmode,w
-        bnz   nxtstr
 
-frststr movlw HIGH Teststr  ; point at first string
-        movwf TststrH
-    movlw LOW Teststr
-        movwf TststrL
+
+frststr movlw HIGH Pmode1   ; point at first string
+        movwf TBLPTRH
+    movlw LOW Pmode1
+        movwf   TBLPTRL
     bra   disptst
 
-nxtstr  movlw .10     ; next string
-    addwf TststrL
-    movlw LOW TeststEnd   
-    cpfslt  TststrL   ; at end of list?
-    bra   frststr
+nxtstr  tblrd*          ; get next char in table
+skpnul  movf  TABLAT,w
+    bnz   nxtdis  
+    tblrd+*         ; skip over any trailing nulls
+    bra   skpnul
+    
+nxtdis  movlw HIGH TeststEnd    
+    cpfslt  TBLPTRH     ; at end of list?
+    bra   chkls           ; check lsbytes of string address
+disnxt  call    lcd_clr
+        call    lcd_home
 
-disptst movff TststrH,TBLPTRH
-    movf  TststrL,w
-    call  lcd_str 
+disptst movf    TBLPTRL,w
+        call  lcd_str 
     bsf   Setupmode,0 ; flag in setup mode
     bra   keyback
+
+chkls   movlw   LOW TeststEnd
+        cpfslt  TBLPTRL
+        bra     frststr         ; End of list, so go back to beginning
+        bra     disnxt
 
 
 ;   here if any CAN frames received   
