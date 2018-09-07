@@ -1,0 +1,3 @@
+[submodule "cbuslib"]
+	path = cbuslib
+	url = ../cbuslib_asm.git

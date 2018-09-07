@@ -1,78 +1,90 @@
 ;     TITLE   "Source for DCC CAB for CBUS"
-; filename CAB1u.asm  23/12/09
+; filename cancab2a.asm 28/3/11
 ; 
 ; Uses 4 MHz resonator and PLL for 16 MHz clock
 ; This is basic CAB with OTM programming, one speed knob and self enum for CAN_ID
-; 128 speed step only
+
 ; Em. Stop facility
 ; Includes Consist setting and clearing.
 ; Ability to set long address into loco in one instruction.
 ; Has no node number facility.
 
-; No 'walkaround' facility yet
+
 ; Drives an 8 char by 2 line display (Everbouquet MC0802A used in prototype but protocol is standard for most displays)
-; Works with CANcmd1 Command Station firmware.
+; Use command station firmware cancmd_n or later for full functionality of emergency stop all
 
 
 ; The setup timer is TMR3. 
 ; CAN bit rate of 125 Kbits/sec
-; Standard frame only
-
+; Standard frame only 
 
 
 ; this code is for 18F2480
-; 'Parameters' left in for future FLiM use. Not implemented in this version.
+; 
 
 ; use with PCB CAB1 rev B
 
 ; 
 
-; various mods to error routine and consist clear
-; now rev c  31/03/09
+; 
+; rev c 31/03/09  various mods to error routine and consist clear
 
-; rev d is with final arrangement for row scan
-; tested with CAB1  11/04/09.  Seems OK
+; rev d 11/04/09  is with final arrangement for row scan - tested with CAB1 
 
-; rev e.  BOR voltage set lower to prevent resets
-; keepalive added using TMR0
-; ignores prog button if no loco
-; no loco selected till handle granted
-; Changed error message format to show loco number
+; rev e.        BOR voltage set lower to prevent resets
+;           keepalive added using TMR0
+;           ignores prog button if no loco
+;           no loco selected till handle granted
+;           Changed error message format to show loco number
 
-; Rev f. Changes to save handle etc. for walkaround
-; Seems to be working OK. Difficult to test everything.  11/07/09
-; Rev g. As rev f but added beep using PWM module.
-; Rev h. change to CAN config sequence. Change in sendTX1. Added beeps. 18/08/09
-; Rev k. (no rev i or j). Added clear of COMSTAT and Tx1con in setup
-; Added clear of Tx1con in sendTXa. Changes to enum sequence.
-; Changed keepalive so it continues during programming etc. uses lpint with TMR0.
-; Rev m (no rev l)major changes for service mode programming. 
-; Rev n same as Rev m but for bootload
-; Rev p  (no rev o) moved LCD strings to flash. Not enough room in eeprom
-; added FR2 support. added speed step select. 
-; modified speed display to blank leading zeros and for different speed steps
-; Rev q. Changed response to master reset so EEPROM is reset
-; modified loco release to stop speed / dir and keepalives  (15/12/09)
-; Rev r. Fix in long address for CV number CV sent = CV and not CV-1
-; Mods to bootloader for WDT and LEDs. Fixed beep problem.
-; Modified speed so display starts at 1 but sent speed still 2.
-; Change to consist set direction bit
-; Correction to cv_ans  05/02/10
-;Rev s. Changed so Handle is cleared to 0xFF on reset or release.  (16/03/10)
-;   cv_ans also changed so non-selected cabs don't show CV answers
-; Rev t  Change in RTR response sequence
-; Rev u  Major change for new enum scheme. 23/03/10
+; Rev f. 11/07/09 Changes to save handle etc. for walkaround
+;           Seems to be working OK. Difficult to test everything.  
 
+; Rev g.      As rev f but added beep using PWM module.
+; Rev h. 18/08/09 change to CAN config sequence. Change in sendTX1. Added beeps. 
 
+; Rev k.      (no rev i or j). Added clear of COMSTAT and Tx1con in setup
+;           Added clear of Tx1con in sendTXa. Changes to enum sequence.
+;           Changed keepalive so it continues during programming etc. uses lpint with TMR0.
 
+; Rev m       (no rev l)major changes for service mode programming. 
+; Rev n       same as Rev m but for bootload
 
+; Rev p       (no rev o) moved LCD strings to flash. Not enough room in eeprom
+;         added FR2 support. added speed step select. 
+;         modified speed display to blank leading zeros and for different speed steps
 
+; Rev q. 15/12/09 Changed response to master reset so EEPROM is reset
+;         modified loco release to stop speed / dir and keepalives  
 
+; Rev r. 05/02/10 Fix in long address for CV number CV sent = CV and not CV-1
+;         Mods to bootloader for WDT and LEDs. Fixed beep problem.
+;         Modified speed so display starts at 1 but sent speed still 2.
+;         Change to consist set direction bit
+;         Correction to cv_ans 
+ 
+; Rev s 16/03/10  Changed so Handle is cleared to 0xFF on reset or release.  
+;         cv_ans also changed so non-selected cabs don't show CV answers
 
-
-
-
-
+; Rev t       Change in RTR response sequence
+; Rev u  23/03/10 Major change for new enum scheme.
+ 
+; Rev v  26/11/10 PNB - Double press of emergency stop does emergency stop all 
+; Rev w       PNB - Emergency stop all now also works when zero speed set
+;         Sorted out some display issues during stop all
+; Rev x  26/12/10 PNB - Set emergency stop mode in response to "track stopped" packet as well as stop request
+;             Reinstate stop message after programming whilst in emergency stop
+;             Display banner and firmware version at startup - timer 0 used for banner display time
+; Rev y 05/03/11    RKH - Add CAB Node Id to parameters, set version to "Y"
+; Rev y 07/03/11  MB - Mods so config can read individual node parameters using RQNPN  (0x73)
+;         Displayed version letter is now that in the params table.
+; Rev 2a 28/3/11  PNB - Reconciled Mike's and Roger's changes, moved definition of parameter sequence to inc file
+;             Added display of both major and minor version to LCD display
+;             Added build number just to be displayed for test versions to confirm bootloading
+;             Changed default from prog to read CV in service mode programming
+; Rev 2b 8/4/11   PNB - Fixed displaying prog or read correctly (but introduced when making read the default in ver 2a)
+;             Fixed blank screen when turning knob to zero during emergency stop all with no loco selected (now displays loco prompt)
+;             Loco prompt now a separate subroutine
 
 
 ; 
@@ -82,18 +94,23 @@
   include   "p18f2480.inc"
   
   ;definitions  Change these to suit hardware.
-  
+
+  include "cbuslib/cbusdefs.inc"  
+
+; Define the node parameters to be stored at node_id
+
+Man_no      equ MANU_MERG ;manufacturer number
+Major_Ver equ 2 
+Minor_Ver equ "b"   
+Module_id   equ MTYP_CANCAB ; id to identify this type of module
+EVT_NUM     equ 0           ; Number of events
+EVperEVT    equ 0           ; Event variables per event
+NV_NUM      equ 0           ; Number of node variables  
+
+; test_ver  equ 1     ; A test version not to be distributed - comment out for release versions
+build_no  equ 3     ; Displayed on LCD at startup for test versions only  
 
 
-
-
-Man_no  equ .165  ;manufacturer number
-Ver_no  equ .101  ;for now
-Para1 equ 1   ;node descriptors (temp values)
-Para2 equ 2
-Para3 equ 3
-Para4 equ 4
-Para5 equ 5
 
 ; note. there seem to be differences in the naming of the CONFIG parameters between
 ; versions of the p18F2480.inf files
@@ -132,6 +149,7 @@ Para5 equ 5
 LCD_PORT equ  PORTC
 LCD_EN   equ  1
 LCD_RS   equ  3
+
 
 ; definitions used by bootloader
 
@@ -239,6 +257,7 @@ LCD_RS   equ  3
   
   IDcount   ;used in self allocation of CAN ID.
   Datmode   ;flag for data waiting and other states
+                ;Bit 0 set if valid CAN frame to be processed
   Count   ;counter for loading
   Count1
   Count2
@@ -265,7 +284,7 @@ LCD_RS   equ  3
   Speed   ;current speed value from A/D
   Speed1    ;speed to send to loco
   Speed2    ;used in speed to ASCII conversion
-  Emspeed   ;holds Em stop speed
+  Emspeed   ;holds Em stop speed - not used!
   Smode   ;speed step mode
   
   Handle    ;handle given by CS
@@ -275,6 +294,8 @@ LCD_RS   equ  3
         ;bit 2 set if checking handle on reset.
         ;bit 3 set if reset by CBUS command
         ;bit 4 set if needing keepalive
+        ;bit 5 set when stop button pressed (flag for emergency stop all)
+        ;bit 6 set during startup banner/version display
 
   Locstat   ;status of loco and cab
         ;bit 0  loco selected
@@ -1098,7 +1119,7 @@ _CANSendBoot
     goto  hpint     ;high priority interrupt
     
     ORG   0810h     ;node type parameters
-node_ID db    Man_no,Ver_no,Para1,Para2,Para3,Para4,Para5
+node_ID db    Man_no, Minor_Ver, Module_id, EVT_NUM, EVperEVT, NV_NUM, Major_Ver
 
     ORG   0818h 
     goto  lpint     ;low priority interrupt
@@ -1262,7 +1283,7 @@ enum_3  movf  Roll,W
 ;**************************************************************
 ;
 ;
-;   low priority interrupt. Used for keepalive.
+;   low priority interrupt. Used for keepalive and title delay
 ; 
 
 lpint movwf W_tempL       
@@ -1276,6 +1297,8 @@ lpint movwf W_tempL
     bcf   INTCON,TMR0IF ;clear flag
     btfsc Modstat,4   ;no keepalive
     call  kp_pkt      ;send speed packet
+    btfsc Modstat,6   ;Delay for title
+    call  clear_title   ;clear title from display
     movff Fsr_temp0Li,FSR0L
     movff Fsr_temp0Hi,FSR0H
     movff Fsr_temp1Li,FSR1L
@@ -1331,8 +1354,18 @@ main1a  btfss Locstat,4   ;in em. stop mode?
     call  lcd_clr
     call  spd_pkt
     bra   main3
-main2 btfsc Datmode,2   ;speed change?
-    call  spd_pkt
+main2 btfss Datmode,2   ;speed change?
+    bra   main3     ; no - so back to keypad scan
+    movf  Speed,F     ; yes - is it a non zero speed?
+    bz    sndspd
+    btfss Modstat,5   ; Are we coming out of stop all?
+    bra   sndspd      
+    call  lcd_clr     ; If so, clear message
+    bcf   Modstat,5   ; and clear stopped flag
+    btfsc Locstat,0   ;any loco selected?
+        bra   sndspd      ;yes, so continue as normal
+    call  locprmpt    ; Display loco prompt again
+sndspd  call  spd_pkt     
 
                 
     ;kaypad scanning routine
@@ -1489,15 +1522,7 @@ loco  clrf  Progmode
     movwf Adr2
     movwf Adr3
     movwf Adr4
-    bsf   LCD_PORT,LCD_RS   ;prompt for loco again
-    movlw LOW Selstr      ;
-    call  lcd_str
-    call  lcd_cr
-    bsf   LCD_PORT,LCD_RS
-    movlw "="
-    call  lcd_wrt
-    movlw " "
-    call  lcd_wrt
+    call  locprmpt      ;prompt for loco again
     lfsr  FSR2,Num1     ;reset pointer
     
     clrf  Numcount
@@ -1515,9 +1540,8 @@ locset  clrf  Numcount      ;for abort
   
     bcf   Locstat,1
     bsf   Locstat,0
-    call  lcd_clr
-    call  loco_lcd      ;restore display
-    bra   keyback
+    bra   locdisp       ; Redisplay loco info
+
 clear bsf   Locstat,1
     bcf   Locstat,0
     call  lcd_clr
@@ -1533,8 +1557,12 @@ conout  bsf   Locstat,0   ;reenable loco
     bcf   Locstat,6   ;out of prog mode
     clrf  Progmode
     clrf  Sermode
-    call  lcd_clr
-    call  loco_lcd
+locdisp call  lcd_clr     ; clear lcd
+    call  loco_lcd    ; displly speed info
+    btfss Locstat,4   ; Waiting for zero after stop?
+    bra   keyback
+    movlw LOW Stopstr   ; If so, reinstate stop message
+    call  lcd_str
     bra   keyback
 
 ;   enter key (acts on whatever has been set up)
@@ -1603,8 +1631,8 @@ frprog  btfss Progmode,0
     call  newdisp
     bra   keyback
 
-rel_mode bcf  Modstat,4   ;stop keepalive
-      movlw 0x21    ;release handle
+rel_mode  bcf Modstat,4   ;stop keepalive
+    movlw 0x21    ;release handle
     movwf Tx1d0
     movff Handle,Tx1d1
     movlw 2
@@ -1616,7 +1644,7 @@ rel_mode bcf  Modstat,4   ;stop keepalive
     call  eewrite
     bcf   Locstat,0
     bcf   Locstat,1
-    bcf   T0CON,TMR0ON    ;stop keepalive 
+    bcf   T0CON,TMR0ON    ;stop keepalive timer interrupts
     bra   loco
 
 con_mode call conconv
@@ -1766,6 +1794,7 @@ cvval1  subwf Numcount,W
     call  lcd_wrt
     bra   nonum
 
+; these are because branches were too long
 
 serr1 goto  serr
 rd_back1 goto   rd_back
@@ -1782,15 +1811,56 @@ packet  movlw 0x07      ;is it a reset frame
     movlw 0x85      
     subwf Rx0d0,W
     bz    rd_back1    ;read back of CV in service mode
+
+    movlw OPC_RQNPN   ;read a parameter by index
+    subwf Rx0d0,W
+    bz    rdpara
+
     movlw 0x5C      ;reboot?
     subwf Rx0d0,W
     bz    reboot1
+
+    movlw OPC_RESTP   ; Emergency stop all request?
+    subwf Rx0d0,W     
+    bz    est_pkt
+    movlw OPC_ESTOP   ; Track stopped? (response from command station)
+    subwf Rx0d0,W     
+    bz    est_pkt
+
 
     btfsc Modstat,1   ;request handle response?
     bra   hand_set    ;do other frames here
     btfsc Modstat,2   ;handle check?
     bra   hand_set
     bcf   Datmode,0
+    goto  main
+
+
+  
+
+est_pkt call  ems_mod     ; Put handset into emergency stop
+    call  ems_lcd     ; Display stop all 
+    bcf   Datmode,0   ; clear packet received flag
+    goto  main
+
+rdpara  call  thisNN      ;read parameter by index (added in rev y)
+    sublw 0
+    bnz   notNN
+    call  para1rd
+    bcf   Datmode,0
+    goto  main
+  
+
+reboot  call  thisNN        ;is it a CAB?
+    sublw 0
+    bnz   notNN       ;no
+    movlw 0xFF
+    movwf EEADR
+    movlw 0xFF
+    call  eewrite     ;set last EEPROM byte to 0xFF
+    reset         ;software reset to bootloader
+
+notNN bcf   Datmode,0
     goto  main
 
 re_set  bcf   PORTA,2     ;turn off red LED if on.
@@ -1845,8 +1915,8 @@ set2  movff Rx0d4,Speed1
     bsf   Locstat,0     ;loco active
   
     call  beep        ;confirm 
-    bsf   T0CON,TMR0ON    ;start keepalive
-    bsf   Modstat,4     ; keepalive flag
+    bsf   T0CON,TMR0ON    ;start keepalive timer interrupt
+    bsf   Modstat,4   ; keepalive flag
     movlw B'10010101'
     movwf T3CON     ;set timer 3 now for A/D update rate
     call  spd_chr       ;speed to chars for display
@@ -2023,17 +2093,7 @@ rd_back call  cv_ans        ;cv answer
     bcf   Datmode,0
     goto  keyback       ;?
 
-reboot  call  thisNN        ;is it a CAB?
-    sublw 0
-    bnz   notNN       ;no
-    movlw 0xFF
-    movwf EEADR
-    movlw 0xFF
-    call  eewrite     ;set last EEPROM byte to 0xFF
-    reset         ;software reset to bootloader
 
-notNN bcf   Datmode,0
-    goto  main
 
 
 
@@ -2273,14 +2333,34 @@ re_set1 clrf  INTCON
     clrf  Modstat
     call  lcd_clr
     bsf   LCD_PORT,LCD_RS
-    movlw LOW Selstr
+;   movlw LOW Selstr
+    movlw LOW Titlstr
     call  lcd_str
     call  lcd_cr
     bsf   LCD_PORT,LCD_RS
-    movlw "="
+    movlw LOW Verstr
+    call  lcd_str
+        movlw   Major_Ver           ; Show major version number
+        addlw   0x30                ; Will need to change this when we get to major version 10
+        call    lcd_wrt
+    movlw Minor_Ver     ; add minor version letter
     call  lcd_wrt
-    movlw " "
+
+; This bit is for deveoper test versions only.
+; It displays the build number in the lcd display 
+; so we can confirm the new version has been loaded or bootloaded
+
+#ifdef test_ver
+    movlw build_no
+    addlw 0x30
     call  lcd_wrt
+#endif
+
+;   movlw "="
+;   call  lcd_wrt
+;   movlw " "
+;   call  lcd_wrt
+    bsf Modstat,6   ; Flag for title display delay
     bsf   PORTA,1     ;fwd LED for now as test
 
 re_set2 clrf  Fnmode        ;holds function range
@@ -2294,14 +2374,40 @@ re_set2 clrf  Fnmode        ;holds function range
     clrf  Conadr        ;consist address
     clrf  Speed
     clrf  Keyflag
-    movlw B'00000111'   ;set Timer 0 for keepalive
+    movlw B'10000111'   ;set Timer 0 for keepalive, enable now for title delay
     movwf T0CON
     clrf  PIR3
     bcf   INTCON,TMR0IF
+    movlw B'10010101'
+    movwf T3CON     ;set timer 3 now for A/D update rate (moved here so can detect knob move before a loco selected in case of recover from emergency stop all
     movlw B'11100000'   ;reenable interrupts
     movwf INTCON      ;enable interrupts
     bcf   Datmode,0
     goto  main
+
+    ; Disply loco prompt after title delay
+
+clear_title 
+    call  locprmpt  ;prompt for loco
+    bcf   Modstat,6   ; Clear flag that title is displayed
+
+    return
+
+locprmpt
+    call  lcd_clr
+    call  lcd_home
+    bsf   LCD_PORT,LCD_RS   
+    movlw LOW Selstr      ;
+    call  lcd_str
+    call  lcd_cr
+    bsf   LCD_PORT,LCD_RS
+    movlw "="
+    call  lcd_wrt
+    movlw " "
+    call  lcd_wrt
+
+    return
+
 
 ;   subrouine used in self enumeration of CANid
 
@@ -3271,7 +3377,25 @@ kp_pkt  movlw 0x47      ;speed /dir command
     
     return
 
-;******************************************************************************8
+;***************************************************************************
+;
+;   send request emergency stop all (REST) packet
+
+rest_pkt  movlw OPC_RESTP   ; CBUS opcode for emergency stop all
+    movwf Tx1d0     ; Build packet in Tx buffer
+    movlw 1
+    movwf Dlc     ; Length of packet is 1 byte
+    call  sendTXa     ;send command
+    
+    return
+
+;******************************************************************************
+
+
+
+
+
+
 ;
 ;   function send routine
 ;
@@ -3608,8 +3732,15 @@ nxtnum  movf  POSTINC2,W
 prog_5    bsf   Progmode,4    ;service mode
       bsf   Progmode,0    ;stay in CVnumber
       bcf   Progmode,1
+      bsf   Sermode,2   ; start in service mode read
+
+      movlw LOW Ser_md    ;write service mode deafult
+      movwf EEADR
+      movf  Sermode,W
+      call  eewrite
+
       call  lcd_clr
-      movlw LOW Pmode1    ;prompt for CV value
+      movlw LOW Rmode1    ;prompt for CV value
       call  lcd_str
       call  lcd_cr
       movlw LOW CV_equ
@@ -3742,19 +3873,48 @@ dir_back    return
 ;*****************************************************************************
 ;   Emergency stop
 ;
+; The main entry point responds to the red key press, if it is a second press
+; then a request emergency stop all packet is sent to the command station.
 ;
-em_sub  btfss Locstat,0   ;valid loco?
-    bra   em_back
-    btfsc Locstat,4
-    return
-    movlw 1
+; The ems_mod entry point is in reponse to seeing a request emergency stop all
+; packet on CBUS, so it puts this handset into emergency stop mode. Although the 
+; command station stops all locos, if we didn't do this then our next keep alive
+; speed packet would set the loco moving again. By putting us into emergency stop
+; mode, the user has to put the control back to zero first to restart the loco
+; Yes, we do send the speed 1 (stop) packet again, but that protects against us having
+; just sent a keep alive packet after the command station responded to the emergency stop
+
+em_sub  btfsc Locstat,4 ; Already in emergency stop mode?
+    bra   em_all    ; Emergency stop pressed again 
+    btfsc Modstat,5 ; Stop button flag (catches case when stop pressed twice with speed 0)
+    bra   em_all
+
+ems_mod btfss Locstat,0 ; valid loco?
+    bra   em_back     ; 
+        
+    movlw 1     
     movwf Speed1
     call  spd_pkt
     movlw LOW Stopstr
     call  lcd_str
-;   call  adc_zero      ;wait for speed to be zero
-    bsf   Locstat,4   ;for clear
-em_back   return
+;   call  adc_zero    ;wait for speed to be zero
+    bsf   Locstat,4   ;for clear 
+em_back bsf   Modstat,5   ; stop button flag
+    return
+
+;****************************************************************************
+;   Emergency stop all - when emergency stop pressed twice
+
+em_all  call  rest_pkt    ; Send emergency stop all to command station
+ems_lcd call  lcd_clr     ; Enter here just to display stop all message
+    btfsc Locstat,0   ; If we have a valid loco
+    bra   emsloco     ;   redisplay loco info
+    call  lcd_cr      ; else just move to bottom line
+    bra   emsdisp
+emsloco call  loco_lcd  
+emsdisp movlw LOW EmStopstr ; Display STOP ALL message
+        call  lcd_str
+    return
 
 ;****************************************************************************
 ;   loco not enabled till speed is zero. (safety feature)
@@ -4049,12 +4209,8 @@ ss_set    movlw LOW Ser_md +1
       movf  Smode,W
       call  eewrite       ;save curent ss mode
       bcf   Progmode,5
-      call  lcd_clr
-      movlw LOW Selstr
-      call  lcd_str
-      call  lcd_cr
-      movlw "="
-      call  lcd_wrt
+      call  locprmpt      ; prompt for loco
+
       return
 
 ;***************************************************************
@@ -4160,6 +4316,30 @@ segful    movlw 0xFF      ;default ID unallocated
       clrf  Modstat     ;no ID
       return
 
+;**********************************************************
+
+;   send individual parameter
+
+para1rd movlw OPC_PARAN
+    movwf Tx1d0
+    movlw LOW node_ID
+    movwf TBLPTRL
+    movlw 8
+    movwf TBLPTRH   ;relocated code
+    decf  Rx0d3,W
+    addwf TBLPTRL
+    bsf   EECON1,EEPGD
+    tblrd*
+    movff TABLAT,Tx1d4
+    bcf   EECON1,EEPGD
+    movff Rx0d3,Tx1d3
+    movlw 5
+    movwf Dlc
+    movff NN_temph,Tx1d1
+    movff NN_templ,Tx1d2
+    call  sendTXa
+    return  
+
 
 ;*********************************************************
 ;   a delay routine
@@ -4193,9 +4373,12 @@ ldely1  call  dely
   ; LCD text strings
 
 
+Titlstr db  "M","E","R","G"," ","C","A",0xC2
+Verstr  db  "V","e","r",0xA0
 Selstr  db  "S","E","L",".","L","O","C",0xCF
 Selstep db  "S","E","L",".","S","T","E",0xD0
-Stopstr db  "S","T","O",0xD0
+Stopstr db  "S","T","O","P",0xA1
+EmStopstr db "S","T","O","P",0x20,"A","L",0xCC
 Relstr  db  "R","E","L","E","A","S","E",0xBF
 Fr1lbl  db  "F","r","1"," ",0xA0
 Fr2lbl  db  "F","r","2"," ",0xA0
@@ -4236,7 +4419,7 @@ Segful  db  "S","e","g","m","e","n",0xF4
   ORG 0xF00000      ;EEPROM data. Defaults
   
 CANid de  B'01111111',0 ;CAN id default 
-NodeID  de  0xFF,0xFF   ;Node ID. CAB default if 0xFFFF
+NodeID  de  0xFF,0xFF   ;Node ID. CAB default is 0xFFFF
 E_hndle de  0xFF,0      ;saved handle. default is 0xFF
 Ser_md  de  0,0       ;program / read mode and service mode
 
