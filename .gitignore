@@ -1,0 +1,17 @@
+*.cof
+*.err
+*.lst
+*.map
+*.mcs
+*.mcw
+*.ERR
+*.LST
+**/*~
+**/.map
+**/build/
+**/default/
+**/dist/
+**/nbproject/private/
+**/nbproject/Makefile*
+**/nbproject/Package*
+/nbproject/private/
