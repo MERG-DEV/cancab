@@ -1,5 +1,5 @@
 ;     TITLE   "Source for DCC CAB for CBUS"
-;     ; filename cancab2m2.asm  010/11/11
+;     ; filename cancab2n.asm 23/12/11
 ; 
 ; Uses 4 MHz resonator and PLL for 16 MHz clock
 ; CAB with OTM and service mode programming, one speed knob and self enum for CAN_ID
@@ -129,6 +129,8 @@
 ;             Conditional assembly for conventional Fn frames or for DFNON / DFNOF. (not both at once)
 ; Rev 2m3         Fix to WDT resets
 ; Rev 2m4         Fix to reset action so Fn tog / mom remains unless deliberately cleared
+; Rev 2m5         Fix for acc numbers folowing speed change  20/12/11
+; Rev 2n         Release version of 2m5
 
 ; Assembly options
   LIST  P=18F2480,r=hex,N=75,C=120,T=ON
@@ -144,14 +146,14 @@
 
 Man_no      equ MANU_MERG ;manufacturer number
 Major_Ver equ 2 
-Minor_Ver equ "m"   
+Minor_Ver equ "n"   
 Module_id   equ MTYP_CANCAB ; id to identify this type of module
 EVT_NUM     equ 0           ; Number of events
 EVperEVT    equ 0           ; Event variables per event
 NV_NUM      equ 0           ; Number of node variables  
 
-test_ver  equ 1     ; A test version not to be distributed - comment out for release versions
-build_no  equ 4     ; Displayed on LCD at startup for test versions only  
+;test_ver equ 1     ; A test version not to be distributed - comment out for release versions
+;build_no equ 5     ; Displayed on LCD at startup for test versions only  
 
 
 
@@ -2066,7 +2068,7 @@ nonum bra   keyback
 devnum  movlw 4
 devnum1 subwf Numcount,W
     bz    nonum
-    movff Numcount,Numtemp2
+    
     movff Key_temp,POSTINC2 ;put number in buffer
     bsf   Datmode,4     ;dev number ready
     incf  Numcount,F
@@ -2078,8 +2080,16 @@ devnum1 subwf Numcount,W
     movff Char,INDF2
     addwf FSR2L
     bsf   LCD_PORT,LCD_RS ;to chars
-    movf  Char,W
+    movlw 0x43
+    call  cur_pos     ;rewrite whole number
+    movff FSR2L,Dncount ;save FSR2
+    lfsr  FSR2,Ddr1
+    movff Numcount,Numtemp2
+devnum2 movf  POSTINC2,W
     call  lcd_wrt
+    decfsz  Numtemp2,F
+    bra   devnum2
+    movff Dncount,FSR2L
     bra   keyback
 
 cvnum movlw 7         ;is it address mode read
