@@ -1,5 +1,5 @@
 ;     TITLE   "Source for DCC CAB for CBUS"
-;     ; filename cancab2p.asm 20/02/12
+;     ; filename cancab2s.asm 28/04/11
 ; 
 ;      All source code is copyright (C) the author(s) concerned
 ;         (c) Mike Bolton 2009-2012
@@ -165,7 +165,7 @@
 ;         Fn status now held in EEPROM. Bit 0 is on or off, bit 1 is mom mode. Kept during walkaround etc.
 ;         On / off cleared to all off on reset or loco change.
 ;         Mom for all Fn keys only cleared by resetting with 'Consist' in. Otherwise is remembered for that CAB. 
-;         Conditional assembly for conventional Fn frames or for DFNON / DFNOF. (not both at once)
+;         Conditional assembly for conventional Fn frames or for DFNOF. (not both at once)
 ; Rev 2m3   MPB Fix to WDT resets
 ; Rev 2m4   MPB Fix to reset action so Fn tog / mom remains unless deliberately cleared
 ; Rev 2m5   MPB Fix for acc numbers folowing speed change  20/12/11
@@ -177,6 +177,34 @@
 ;               Fix blank screen if handle or address does not match when plug in after walkabout - now goes to loco prompt
 ;               Implemented PNN response to QNN
 ;                               Fix problem with bit pattern for loco functions F10,F11,F12
+; Rev 2q  23/3/12 MBP Fix for forced CAB reset using Prog button when plugged in. 
+;     10/4/12 PNB Extended parameters in line with new spec
+;           Added message strings for steal/share features
+;     1/6/12  PNB Set direction correctly from PLOC when taking over stationary loco      
+;     3/6/12  PNB Add support for steal/share request - use consist button at "TAKEN" message to select option, then press enter
+;     7/6/12  PNB Monitor speed/directoin packets for change or direction or emergency stop from another sharing cab
+;     17/6/12 PNB Save cmd stn ver info when stat received, display on double press of prog before tet strings
+;     10/02/13 MPB Dev version 7. Derived from 2q6.
+;         Changes to accessory control to use toggle.
+;         To get to accessory mode, press Enter
+;         Enter dev. number
+;         Send by pressing Consist. This toggles on each press. The + / - shows next direction to be sent.
+;         Change dev.number just by changing the number with numeric keys
+;         If a ASON or ASOF to the selected device comes from elsewhere, CAB changes its next polarity.
+;         Accessory state remembered in EEPROM for walkaround or when next used - if a loco is selected.
+;         Hard reset clears accessory data. 
+;     16/02/13 MPB Dev version 8
+;         Fixes to return from STOP
+;         Fix for correction of device numbers using Enter
+;           23/02/13 PNB - fix bug where speed step 48 sent after taking over stationary loco
+; v2r1    11/04/13 MPB - corrected display when returning from Prog' mode. Otherwise same as 2q9
+; v2r2    09/05/13 MPB - further correction to prog mode return (prog_ret added)
+;            - change to fix FR1 being displayed when in OTM prog mode (fr1 routine)
+; v2r   01/09/13 MPB - release version of 2r2.
+; v2s   28/04/14 MPB - correction to Fn ranges 13 to 20 amd 21 to 28
+; V2sBeta1  04/05/14 PNB - Update parameter block to latest spec including BETA_VER, use cbusdefs8h
+; V2s       25/05/14 PNB - Build for release
+
 
 
 ; Assembly options
@@ -186,22 +214,21 @@
   
   ;definitions  Change these to suit hardware.
 
-  include "cbuslib/cbusdefs.inc"  
+  include "cbuslib/cbusdefs.inc"
   include "cabmessages.inc" ; Version of messages file only changes if messages are added or message lengths changed
 
-; Define the node parameters to be stored at node_id
+; Define the node parameters to be stored at nodeprm
 
-Man_no      equ MANU_MERG ;manufacturer number
-Major_Ver   equ 2
-Minor_Ver   equ "p"
-Module_id   equ MTYP_CANCAB ; id to identify this type of module
+MAN_NO      equ MANU_MERG ;manufacturer number
+MAJOR_VER   equ 2
+MINOR_VER   equ "s"
+BETA_VER    equ 0           ; Beta build number: Set to zero for a release build
+MODULE_ID   equ MTYP_CANCAB ; id to identify this type of module
 EVT_NUM     equ 0           ; Number of events
 EVperEVT    equ 0           ; Event variables per event
 NV_NUM      equ 0           ; Number of node variables  
-NODEFLGS  equ B'00000010'  ; Node flags  Consumer=No, Producer=Yes, FliM=No
-
-;test_ver   equ 1     ; A test version not to be distributed - comment out for release versions
-build_no    equ 6     ; Displayed on LCD at startup for test versions only
+NODEFLGS  equ B'00001010'  ; Node flags  Consumer=No, Producer=Yes, FliM=No, Boot=YES
+CPU_TYPE  equ P18F2480
 
 
 
@@ -356,23 +383,18 @@ MAX_FUN  equ    27
   NN_templ
   
   IDcount   ;used in self allocation of CAN ID.
-  Datmode   ;node status. 
-        ;bit 0 set if it has waiting CAN frame received
-        ;bit 1 set if in setup mode
-        ;bit 2 set is a speed change
-        ;bit 3 set if in 'device' mode. (to send accessory event)
-        ;bit 4 set if device info ready to send
-        ;bit 5 set if device action is an OFF (clear for an ON - as default)
+  
         
   Count   ;counter for loading
   Count1
   Count2
   Keepcnt   ;keep alive counter
   Lat0count ;latency counter - transmit buffer 0
-        Lat1count       ;latency counter - transmit buffer 1
+    Lat1count   ;latency counter - transmit buffer 1
 
   Temp    ;temps
   Temp1
+  Tempd
   Err_tmp
   Intemp
   Intemp1
@@ -380,9 +402,9 @@ MAX_FUN  equ    27
   Incount
   Input
   Atemp   ;port a temp value
-  Dlc   ;data length
+  Dlc     ;data length
 
-  Key   ;key number
+  Key     ;key number
   Key_temp  ;for debounce
   Debcount  ;debounce counter
   Keyflag   ;keyboard mode
@@ -395,6 +417,8 @@ MAX_FUN  equ    27
   Smode   ;speed step mode
   
   Handle    ;handle given by CS
+
+
   Modstat   ;node status. Used when finding a CAN_ID and handle.
         ;bit 0 set if it has CANid
         ;bit 1 set if waiting for handle
@@ -418,6 +442,9 @@ MAX_FUN  equ    27
   Setupmode ; Status of setup mode
         ;bit 0  Prog pressed once for setup mode
                 ;bit 1  Prog pressed again - now in setup mode
+        ;bit 2  Showing command station version number
+
+  Chr_cnt   ;character count. Used in LCD display
 
   
   Char    ;store char for LCD
@@ -441,10 +468,21 @@ MAX_FUN  equ    27
   Adr_hi    ;address hi byte
   Adr_lo    ;address lo byte
 
-  Ddr1    ;ASCII address
+  Datmode   ;node status. 
+        ;bit 0 set if it has waiting CAN frame received
+        ;bit 1 set if in setup mode
+        ;bit 2 set is a speed change
+        ;bit 3 set if in 'device' mode. (to send accessory event)
+        ;bit 4 set if device info ready to send
+        ;bit 5 set if device action is an OFF (clear for an ON - as default)
+        ;bit 6 busy flag
+  Dev_hi    ;hi byte of device number
+  Dev_lo    ;lo byte of device number
+  Ddr1    ;Device ASCII address
   Ddr2
   Ddr3
   Ddr4
+  Devcnt    ;number of device digits 
 
   
 
@@ -452,9 +490,9 @@ MAX_FUN  equ    27
   Dnum2
   Dnum3
   Dnum4
-  Dncount   ;device numbers entered
-  Dev_hi    ;hi byte of device number
-  Dev_lo    ;lo byte of device number
+  Dncount   ;device numbers entered (index)
+  
+  
   Hi_temp   ;address hi byte in hex to ascii conversion
   Lo_temp   ;address lo byte in hex to ascii conversion
   Spd1    ;ASCII speed
@@ -506,6 +544,13 @@ MAX_FUN  equ    27
           ; 2 is register
           ; 3 is address if needed
           ; bit 2 is 1 for read and 0 for write
+
+  Dispmode    ; Display mode, when certain keys have special function
+          ; 0 is prompting for steal  \_ These 2 bits are same as in GLOC flag byte so,
+          ; 1 is prompting for share  /  after anding out other bits, can be put straight into packet
+          ; 2 is loco taken mode (set when showing taken, steal or share)
+          ; 3 is entering number for shuttle in release mode
+          ; 4 is error message displayed after session loss or cancellation
 
   CVnum_hi    ;hex value of CV number
   CVnum_lo
@@ -621,17 +666,14 @@ MAX_FUN  equ    27
   Enum13
 
 
-    AccStat0    ; Acccessory status - tracked so we can toggle on next button press
-    AccStat1    ; 
-    AccStat2
-    AccStat3
-    AccStat4
-    AccStat5
-    AccStat6
-    AccStat7
+    
+    
 
-  
+  Cmdmajv   ; Major version of command station, saved for info in setup mode
+  Cmdminv   ; Minor version of command station
+  Cmdbld    ; Buid no. of command station
 
+  Lastloco  ; Last loco used
   
   ;add variables to suit
 
@@ -706,8 +748,6 @@ MAX_FUN  equ    27
 
 ;**********************************************************************************
   
-
-
 ; This is the bootloader
 ; ***************************************************************************** 
 ;_STARTUPCODE 0x00
@@ -1291,23 +1331,47 @@ _CANSendBoot
 ;
 ;   start of cancab program code
 
+
+
     ORG   0800h
-    nop           ;for debug
+
+loadadr nop           ;for debug
     goto  setup
 
     ORG   0808h
     goto  hpint     ;high priority interrupt
     
-    ORG   0810h     ;node type parameters
-node_ID db    Man_no, Minor_Ver, Module_id, EVT_NUM, EVperEVT, NV_NUM, Major_Ver, NODEFLGS
-
     ORG   0818h 
     goto  lpint     ;low priority interrupt
 
 
+; NODE PARAMETER BLOCK
+
+    ORG   0820h     
+nodeprm db    MAN_NO, MINOR_VER, MODULE_ID, EVT_NUM, EVperEVT, NV_NUM, MAJOR_VER,NODEFLGS,CPU_TYPE,PB_CAN ; Main parameters
+    dw    loadadr     ; Load address for module code above bootloader
+    dw    0       ; Top 2 bytes of 32 bit address not used
+  dw          0       ;15-16 CPU Manufacturers ID low
+    dw      0       ;17-18 CPU Manufacturers ID high
+    db    CPUM_MICROCHIP,BETA_VER     ;19-20 CPU Manufacturers code, Beta revision
+sparprm fill  0, prmcnt-$   ; Unused parameter space set to zero
+
+PRMCOUNT equ  sparprm-nodeprm ; Number of parameter bytes implemented
+
+    ORG   0838h
+
+prmcnt  dw    PRMCOUNT    
+nodenam dw    Cabstr  
+    dw    0
+
+PRCKSUM equ MAN_NO+MINOR_VER+MODULE_ID+EVT_NUM+EVperEVT+NV_NUM+MAJOR_VER+NODEFLGS+CPU_TYPE+PB_CAN+HIGH Cabstr+LOW Cabstr+HIGH loadadr+LOW loadadr+PRMCOUNT+CPUM_MICROCHIP+BETA_VER
+
+cksum dw    PRCKSUM     ; Checksum of parameters
+
+
 ;*******************************************************************
 
-    ORG   0820h     ;start of program
+    ORG   0840h     ;start of program
 ; 
 ;
 ;   high priority interrupt. Used for CAN receive and transmit error.
@@ -1398,8 +1462,7 @@ load  movf  POSTINC1,W
     
     btfsc Rx0dlc,RXRTR    ;is it RTR?
     bra   isRTR
-;   btfsc Datmode,1     ;setup mode?
-;   bra   setmode 
+
     movf  Rx0dlc,F
     bz    back
     btfss Rx0sidl,3   ;ignore extended frames
@@ -1425,7 +1488,7 @@ back1 clrf  PIR3      ;clear all flags
 isRTR btfss Modstat,0   ;has got a CAN ID ?
     bra   back      ;no, so do nothing
     movlb .15
-    ;clrf TXB2CON
+  
 isRTR1  btfsc TXB2CON,TXREQ ;wait till clear
     bra   isRTR1
     bsf   TXB2CON,TXREQ ;send ID frame - preloaded in TXB2
@@ -1536,19 +1599,22 @@ stop1 movlw 1               ; in emergency stop, need speed to be zero before al
     movf  Speed,F     ;is speed zero?
     bnz   main3     ;if not -- do nothing
     bcf   Locstat,4   ;clear em. stop
-;   bcf   Modstat,5
     bcf   Modstat,7       ; Emergency stop all flag
-;   movff Speed,Speed1
+
     btfsc Datmode,6   ;busy?
     bra   main4
     call  locdisp
     call  spd_pkt
+;   bra   main3
+main4 btfsc Datmode,6   ;busy?
     bra   main3
-main4 btfss Datmode,3   ;device mode
+    btfss Datmode,3   ;device mode
     bra   main3
     call  devdisp
-    btfsc Datmode,4
+    btfss Datmode,4
+    bra   main3
     call  dev_nr
+    call  devdisp1
     bra   main3
     
 main2 clrwdt
@@ -1557,23 +1623,29 @@ main2 clrwdt
         bcf     Modstat,5       ; Clear stop pressed once flag on any knob movement
     movf  Speed1,F    ; Is it a non zero speed?
     bnz   sndspd
-;       movf    Speed1,w
-;       cpfslt  2               ; Is speed set to 1 (emerg stop) - if so leave it at 1 till we have non-zero
+
     btfss Modstat,7   ; Are we coming out of stop all?
-    bra   sndspd      
+    bra   main2a      
         movlw   1
         movwf   Speed1          ; For speed zero coming out of emerg stop, still send speed 1
         bcf     Modstat,7
     btfsc Datmode,6   ;busy?
     bra   main3     ;yes so no message
     call  lcd_clr     ; If so, clear message
-;   bcf     Modstat,5   ; and clear stopped flag
-    btfsc Locstat,0   ;any loco selected?
-        bra   sndspd      ;yes, so continue as normal
+main2a  btfsc Locstat,0   ;any loco selected?
+        bra   main2b      ;yes, so continue as normal
     call  locprmpt    ; Display loco prompt again
+main2b  btfss Datmode,3   ; in dev. mode?
+    bra   sndspd
+    call  devdisp     ; display prompt
+    btfsc Datmode,4   ; device already set?
+    call  devdisp1    ; display complete device info. 
+    
+;   bra   main3
 
 
 sndspd  call  spd_pkt         ; Send new changed speed
+    
         
                 
     ;kaypad scanning routine
@@ -1708,12 +1780,14 @@ dir   call  dir_sub
 emstop  call  em_sub
     bra   keyback
 
-;   set consist
+;   consist key pressed
 
 cons  btfsc Datmode,3   ;is it dev mode?
     bra   dev_tog     ;toggle device N or R
-    btfsc Modstat,7   ;in stop mode?
+    btfsc Modstat,7   ;in stop mode?   
     bra   keyback     ;do nothing
+    btfsc Dispmode,2    ;Is loco taken message displayed?
+    bra   tknopt      ;Do steal/share options
     btfsc Locstat,2   ;is it already set
     bra   cons1
     btfss Locstat,0   ;valid loco?
@@ -1728,33 +1802,62 @@ cons1 bsf   Datmode,6   ;busy
     call  conclear
     bra   keyback
 
-dev_tog btfsc Datmode,5
+dev_tog movf  Devcnt,F
+    bz    keyback     ;no number entered
+    btfss Datmode,4
+    call  devconv     ;first time so convert number
+    bsf   Datmode,4
+    btfsc Datmode,5
     bra   set_rev
     bsf   Datmode,5
     call  dev_nr
+    call  devout      ;send short event
     bra   keyback
 set_rev bcf   Datmode,5
     call  dev_nr
+    call  devout      ;send short event
     bra   keyback
+
+; When loco taken, consist key toggles between steal or share prompt
+
+tknopt  btfsc Dispmode,0    ; Prompting for steal?  
+    bra   prmtsh      ; Yes - go and prompt for share
+    bcf   Dispmode,1    ; No, either still on taken message or prompting for share, set flag now prompting for Steal
+    bsf   Dispmode,0    ; Clear share flag
+    call  loc_adr
+    movlw HIGH Stlstr
+    movwf TBLPTRH
+    movlw LOW Stlstr    ; Steal prompt
+    bra   tkprmt
+
+prmtsh  bsf   Dispmode,1    ; Set share flag
+    bcf   Dispmode,0    ; clear steal flag
+    call  loc_adr
+    movlw HIGH Sharestr
+    movwf TBLPTRH
+    movlw LOW Sharestr  ; Share prompt
+    
+tkprmt  call  lcd_str
+    bra   keyback 
 
 ; loco key  (does various things)
 
 loco  call  lcd_clr
     bcf   Datmode,6     ;clear busy flag always
     clrf  Progmode
-    clrf  Sermode 
+    clrf  Sermode
+    clrf  Dispmode  
+    clrf  Setupmode
+    btfsc Locstat,6     ;in prog mode?
+    bra   prog_ret      ;returning from prog mode
     btfss Modstat,7     ;clear from stop all
     bra   loco1a
-;   clrf  Progmode
-;   clrf  Sermode 
-    bcf   Locstat,6     ;cancel prog mode
+
+  
     bcf   Modstat,7
     bcf   Modstat,5
     btfss Locstat,0     ;any loco
     bra   no_loco
-  
-    
-  
 
 loco1b  call  loco_lcd
     movlw 0x40
@@ -1772,8 +1875,7 @@ loco1a  btfsc Locstat,4     ;normal stop mode?
     bra   loco1b
 loco1d  btfsc Datmode,3
     bra   devback       ;clear from device mode
-    btfsc Datmode,4
-    bra   devback
+
     
 loco1 
     btfsc Locstat,0     ;any loco set?
@@ -1809,10 +1911,7 @@ locset  clrf  Numcount      ;for abort
     bra   conout
     btfss Locstat,1
     bra   clear
-;   btfsc Datmode,3
-;   bra   devback
-;   btfsc Datmode,4
-;   bra   devback
+
     bcf   Locstat,1
     bsf   Locstat,0
     bcf   Progmode,6
@@ -1835,17 +1934,22 @@ devback btfss Locstat,0     ;no loco
     bra   db2
     bsf   Locstat,0     ;don't prompt for release if coming back from a device set
     bcf   Locstat,1
-  ; call  lcd_clr
+  
     call  locdisp
     
-  ; call  lcd_cr
+  
 db1   bcf   Datmode,3     ;out of dev mode
-    bcf   Datmode,4
-    bcf   Datmode,5
+    movlw LOW Dat_save
+    movwf EEADR
+    movf  Datmode,W
+    call  eewrite
     bra   keyback
+
 db2   bcf   Datmode,3     ;out of dev mode
-    bcf   Datmode,4
-    bcf   Datmode,5
+    movlw LOW Dat_save
+    movwf EEADR
+    movf  Datmode,W
+    call  eewrite
     goto  no_loco
         
 dspatch movlw   HIGH DispStr
@@ -1856,10 +1960,15 @@ dsp1  call  lcd_str
     bsf   Datmode,6   ;busy
     bra   keyback
 
+
 disprel movlw HIGH Relstr
     movwf TBLPTRH
     movlw LOW Relstr
     bra   dsp1
+
+prog_ret bcf  Locstat,6   ;clear prog mode
+    call  locdisp
+    bra   keyback
 
 conout  bsf   Locstat,0   ;reenable loco
     bcf   Locstat,2   ;out of consist mode
@@ -1869,16 +1978,24 @@ conout  bsf   Locstat,0   ;reenable loco
     clrf  Sermode
     bcf   Datmode,6   ;not busy
     call  locdisp
-
-
-keyback1  goto  keyback
-
+    bra   keyback
 
   
 ;   enter key (acts on whatever has been set up)
     
 enter btfss Datmode,6   ;busy?
     goto  devmode     ;OK so set device command
+    btfss Dispmode,2    ; Loco taken mode?
+    bra   entcnt      ; no - continue
+    
+    movlw B'00000011'   ; Check for either share or steal mode
+    andwf Dispmode,w
+    bnz   rqhndl      ; No, so do nothing
+    bra   keyback     ; Yes - re-request loco
+
+entcnt  btfsc Dispmode,4    ; Error message displayed?
+    bra   loco      ; Enter acts same as loco to clear error message
+
     bcf   Sermode,5
     btfsc Progmode,7
     call  ss_set
@@ -1898,25 +2015,28 @@ enter btfss Datmode,6   ;busy?
     btfsc Locstat,6
     bra   prog_mode
     btfsc Locstat,0   ;any loco selected?
-    bra   keyback
+    bra   keyback1
     movf  Numcount,F
     bz    noadr     ;no address set
     btfsc Datmode,3
     bra   devcon
     movff Numcount,Numtemp  ;for display later
     call  adrconv     ;put input address into two HEX bytes
-    call  get_handle
+    movlw 0       ; Flag for normal request (not steal/share)
+rqhndl  call  get_handle
     bcf   Datmode,6   ;not busy
     bra   keyback     ;wait for handle from CS
 devcon  btfsc Datmode,4   ;nothing to send
     call  devout
-    bra   keyback
+    bra   rqhndl
+
+
+    ; Loco taken, so if user has toggled to steal or share using consist key, 
+    ; and now presses enter, redo loco request in steal or share mode
 
 
     
-noadr bcf   Datmode,3   ;clear dev mode
-    
-    bra   keyback
+noadr bra   keyback
 
 ssmode  btfsc Progmode,6    ;in test mode?
     bra   keyback
@@ -1933,6 +2053,8 @@ fr1   btfsc Datmode,3   ;device mode?
     bra   frprog
     btfss Locstat,0   ;any loco?
     bra   ssmode      ;speed step set
+    btfsc Locstat,6   ;in any prog mode?
+    goto  keyback     ;do nothing
     btfss Fnmode,0
     bra   setfr1
     bcf   Fnmode,0
@@ -1943,7 +2065,7 @@ fr1   btfsc Datmode,3   ;device mode?
 setfr1  bsf   Fnmode,0
     bcf   Fnmode,1
     btfsc Locstat,4   ;stop mode?
-    goto  keyback
+    bra   keyback
     movlw 0x40      ;cursor address
     call  cur_pos
     movlw HIGH Fr1lbl
@@ -1968,7 +2090,7 @@ frprog  btfss Progmode,0
     movf  Sermode,W
     call  eewrite
     call  newdisp
-    bra keyback
+    bra   keyback
 
 rel_mode  bcf Modstat,4   ;stop keepalive
     movlw 0x21    ;release handle
@@ -1978,25 +2100,34 @@ rel_mode  bcf Modstat,4   ;stop keepalive
     movwf Dlc
     call  sendTXa
     
-relloco         movlw LOW E_hndle   ;clear handle in EEPROM
+relloco 
+        movlw LOW E_hndle   ;clear handle in EEPROM
     movwf Eadr
-                movlw   4                      ; fill 4 bytes
-                movwf   Ecount
+        movlw   4                      ; fill 4 bytes
+        movwf   Ecount
     movlw 0xFF      ;no handle and invalid address is 0xFF
     call  eefill
  
-    bcf Locstat,0
-    bcf Locstat,1
-    bcf T0CON,TMR0ON    ;stop keepalive timer interrupts
+    bcf   Locstat,0
+    bcf   Locstat,1
+    bcf   T0CON,TMR0ON    ;stop keepalive timer interrupts
     call  clr_fun     ;clear function table
-    bcf Datmode,6   ;not busy
-    bra loco
+
+    bcf   Datmode,0   ;packet dealt with
+
+      btfsc Dispmode,4    ;message displayed?
+    bra   main      ;yes, so leave displayed and wait for loco key or enter
+  
+finrel  bcf   Datmode,6   ;not busy
+    bra   loco
 
 con_mode call conconv
     sublw 0
     bz    do_con      ;OK value
     call  conset      ;do again
     bra   keyback
+
+
 
 do_con  movlw 0x45
     movwf Tx1d0     ;command set consist
@@ -2024,7 +2155,6 @@ con_clr movlw 0x45
     call  loco_lcd
     bcf   Datmode,6   ;not busy
     bra   keyback
-
 
 fr2   btfsc Datmode,3   ;in device mode?
     bra   keyback
@@ -2069,7 +2199,6 @@ frprog2 btfss Progmode,0
     call  newdisp     ;update display
     bra   keyback
     
-
 prog  btfsc Modstat,7   ;in stop mode
     bra   no_prog
     bcf   Sermode,5
@@ -2080,14 +2209,17 @@ prog  btfsc Modstat,7   ;in stop mode
     bsf   Datmode,6   ;busy
     call  prog_sub
 no_prog   bra   keyback
+
     
 setup_mode1 
     bsf   Progmode,6    ;block other activity
     goto setup_mode
 
-number  btfsc Datmode,3
+number  btfsc Datmode,6     ;busy?
+    bra   num1
+    btfsc Datmode,3
     bra   devnum
-    bsf   Datmode,6     ;busy
+num1  bsf   Datmode,6     ;busy
     btfsc Sermode,5     ;block numbers in service mode
     bra   keyback
     btfss Locstat,0
@@ -2118,19 +2250,26 @@ adrnum1 subwf Numcount,W
     call  lcd_wrt
 nonum bra   keyback
 
-  
+devnum  btfss Datmode,4   ;was dev number set
+    bra   devnum_a    ;no
+    bcf   Datmode,4   ;change dev. number
+    call  devdisp     ;clear old number
+    clrf  Numcount
+    lfsr  FSR2,Dnum1      ;reset buffer pointer   
 
-devnum  movlw 4
+devnum_a  movlw 4
 devnum1 subwf Numcount,W
     bz    nonum
     
-    movff Key_temp,POSTINC2 ;put number in buffer
-    bsf   Datmode,4     ;dev number ready
+;   
+    
+devnum3   movff Key_temp,POSTINC2 ;put number in buffer
+
     incf  Numcount,F
     movf  Key_temp,W
     addlw 0x30
     movwf Char      ;hold char
-    movlw 5
+    movlw 6
     subwf FSR2L,F
     movff Char,INDF2
     addwf FSR2L
@@ -2140,6 +2279,7 @@ devnum1 subwf Numcount,W
     movff FSR2L,Dncount ;save FSR2
     lfsr  FSR2,Ddr1
     movff Numcount,Numtemp2
+    movff Numcount,Devcnt
 devnum2 movf  POSTINC2,W
     call  lcd_wrt
     decfsz  Numtemp2,F
@@ -2163,7 +2303,7 @@ cvnum1  subwf Numcount,W
     bsf   LCD_PORT,LCD_RS ;to chars
     movf  Char,W
     call  lcd_wrt
-    bra   keyback
+keyback1 bra    keyback
     
 funct btfsc Locstat,1   ;release mode?
     bra   keyback
@@ -2173,7 +2313,6 @@ funct btfsc Locstat,1   ;release mode?
     movlw 1       ;for now. (toggle only)
     call  funsend     ;sort out Fn and send
   
-;   bsf   Locstat,3   ;flag for clear Fn
     bcf   Datmode,6   ;not busy
     bra   keyback
 
@@ -2204,21 +2343,34 @@ devmode btfss Modstat,0   ;got CAN ID?
     call  setloop     ;get CAN_ID
     btfsc Modstat,7   ;in stop mode?
     goto  keyback
+
     btfss Datmode,3   ;already in dev mode?
     bra   devset
-    bra   devout
+    btfsc Datmode,4
+    bra   devset1
+    call  devdisp     ;clear existing dev no.for edit
+;   bra   devset      ;
+;devset2  call  devdisp1
+
 devset  bsf   Datmode,3   ;set to dev mode
-    call  devdisp
+    btfsc Datmode,4   ;already used in dev mode?
+    bra   devset1
+    call  devdisp     ;display for number
+    clrf  Devcnt
     clrf  Numcount
     lfsr  FSR2,Dnum1    ;set index for dev numbers
     goto  keyback
+devset1 call  devdisp1
+    goto  keyback
+
+; now a subroutine
 
 devout  btfss Datmode,4   ;ready to send?
-    goto  keyback
-    call  devconv
+    return
+
     movlw 0x98      ;set up frame
     movwf Tx1d0
-    btfsc Datmode,5   ;polarity?
+    btfss Datmode,5   ;polarity?
     bsf   Tx1d0,0     ;set to off
     clrf  Tx1d1
     clrf  Tx1d2     ;default of 0x0000 so device numbers can be taught
@@ -2227,29 +2379,30 @@ devout  btfss Datmode,4   ;ready to send?
     movlw 5
     movwf Dlc
     call  sendTXa
-    bcf   Datmode,4   ;message sent
     call  beep
-;   call  lcd_clr
-    call  devdisp
-    lfsr  FSR2,Dnum1    ;set index for dev numbers
-    clrf  Numcount
-    goto  keyback
+    return
+
+    
 
 ; these are because branches were too long
 
-serr1 goto  serr
-rd_back1 goto   rd_back
-reboot1 goto  reboot  
+serr1   goto  serr
+rd_back1  goto  rd_back
+reboot1   goto  reboot  
 
 
 ; Handset setup mode
 ;
 ; Two presses of Prog whilst no loco controlled to get into setup mode
-;   For now - a test of all message strings
+; This will be a setup menu one day.
+;   For now - displays command stdsation version number and then cycles thorugh a test of all message strings
+; as prog is pressed
 
 setup_mode
     btfsc Progmode,7    ; in speed step seting mode?
     bra   keyback
+    btfsc Setupmode,2   ; Are we showing command station version?
+    bra   tstdsp      ; Yes - continue with test strings
         btfsc   Setupmode,1     ; if already in test mode
         bra   nxtstr      ; straight on with next string
         btfsc   Setupmode,0     ; Prog already pressed once?
@@ -2257,8 +2410,45 @@ setup_mode
         bsf     Setupmode,0
         bra     keyback
 
+;   Start by showing command station version number (if set)
+
 setup_start
-        bsf     Setupmode,1
+        bsf     Setupmode,1   ; Flag for in setup mode
+    bsf   Setupmode,2   ; flag for showing command station version
+    call  lcd_clr 
+    movlw HIGH Cmdstr
+    movwf TBLPTRH    
+    movlw LOW Cmdstr
+    call  lcd_str
+    call  lcd_cr
+    movlw HIGH Verstr
+    movwf TBLPTRH    
+    movlw LOW Verstr
+    call  lcd_str
+    movlw 0
+    addwf   Cmdmajv,w           ; Show major version number
+    bz    tstdsp        ; if zero, not set so carry on with display string test
+    movwf W_temp
+    movlw .100
+    subwf W_temp,w      ; If more than 100, test version so just report version less 100
+    bc    scsver        ; If less than 100, continue with original number
+    movf  W_temp
+    movlw 'T'
+    call  lcd_wrt
+
+scsver  movf  W_temp,w    
+    addlw   0x30                ; Will need to change this when we get to major version 10
+        call    lcd_wrt
+    movf  Cmdminv,w     ; add minor version letter
+    call  lcd_wrt
+    movlw 0
+    addwf   Cmdbld,w          ; Show build no. if non zero
+    bz    dspdun          ; if zero, not set so carry on with display string test
+    addlw 0x30        ; Works up to build 9
+    call  lcd_wrt
+dspdun  bra   keyback
+
+tstdsp  bcf   Setupmode,2     ; Not showing cmd station ver now
     call  lcd_clr 
     movlw HIGH Testing
     movwf TBLPTRH           
@@ -2287,7 +2477,7 @@ disnxt  call    lcd_clr
 
 disptst movf    TBLPTRL,w
         call  lcd_str 
-    bsf   Setupmode,0 ; flag in setup mode
+    bsf   Setupmode,1 ; flag in setup mode
     bra   keyback
 
 chkls   movlw   LOW TeststEnd
@@ -2316,17 +2506,26 @@ packet  movlw 0x07      ;is it a reset frame
 
     movlw OPC_QNN     ; Request node info
     subwf Rx0d0,W
-    bnz   chkrb
+    bnz   chkstat
     call  sndinf      ; Send requested info   
     bra   pktdun
 
-chkrb movlw 0x5C      ;reboot?
+chkstat movlw OPC_STAT    ; Request node info
+    subwf Rx0d0,W
+    bnz   chkrb
+    call  storinf     ; Store command station info    
+    bra   pktdun
+
+
+
+chkrb movlw 0x5C       ;reboot?
     subwf Rx0d0,W
     bz    reboot1         
 
     movlw OPC_RESTP   ; Emergency stop all request?
     subwf Rx0d0,W     
     bz    est_pkt
+
     movlw OPC_ESTOP   ; Track stopped? (response from command station)
     subwf Rx0d0,W     
     bz    est_pkt
@@ -2335,11 +2534,57 @@ chkrb movlw 0x5C      ;reboot?
     bnz   othopc
     goto  err       ;error
 
-othopc  btfsc Modstat,1   ;request handle response?
+    ; These opcodes only apply if we have a session
+
+othopc  btfss Locstat,0   ; Do we have a loco selected?
+    bra   hndopc      ; No, no need to check these opcodes
+
+    movlw OPC_DSPD    ; Speed/direction
+    subwf Rx0d0,W
+    bz    chkdspd
+
+    movlw OPC_DFNON
+    subwf Rx0d0,W
+    bz    chkfun
+
+    movlw OPC_DFNOF
+    subwf Rx0d0,W
+    bz    chkfun
+
+    movlw OPC_DFUN    ; Set functions
+    subwf Rx0d0,W
+    bnz   hndopc
+  
+; If we get a matching function packet (sharing) set our function status to match
+
+chkfun  movf  Handle,w
+    subwf Rx0d1,W     ; Does it match our handle?
+    bnz   pktdun      ; If not, then this packet is not for us; 
+        ;  ??? this code will set the function status to match that of the received packet
+    bra   pktdun
+    
+; If we get a matching speed/direction packet (sharing), set direction leds and if speed is 1 then
+; display STOP! for emergency stop.  A version of cancab that uses an encoder instead of pot could also set speed here
+             
+chkdspd movf  Handle,w
+    subwf Rx0d1,W     ; Does it match our handle?
+    bnz   pktdun      ; If not, then this packet is not for us
+    lfsr  FSR0,Rx0d2    ; Point at speed/direction in dspd packet
+    call  setdir      ; Set direction flag and led
+    movlw 0x7F
+    andwf INDF0,w     ; Get speed
+    sublw 1       ; Is speed 1 (emergency stop?)    
+    bnz   pktdun
+    bcf   Locstat,4   ; So em_sub doesn't think this is a double press
+    call  em_sub      ; Emergency stop
+    bra   pktdun
+
+hndopc  btfsc Modstat,1   ;request handle response?
     bra   hand_set    ;do other frames here
     btfsc Modstat,2   ;handle check?
     bra   hand_set
-    bra   pktdun
+    bra   hs2       ;other packets?
+;   bra   pktdun
 
 est_pkt call  ems_mod     ; Put handset into emergency stop
     call  beep
@@ -2392,12 +2637,19 @@ re_set  bcf PORTA,2     ;turn off red LED if on.
   
 re_set3 goto  re_set1a      ;reinitialises handset
 re_set1g  goto  re_set1     ;Reset after handle doesn't match
+opdev1    goto  opdev     ;device opcode jump
     
 hand_set 
 
     movlw OPC_PLOC        
     subwf Rx0d0,W
     bz  set1
+hs2   movlw OPC_ASON      ;check for device command from elsewhere      
+    subwf Rx0d0,W
+    bz    opdev1
+    movlw OPC_ASOF        
+    subwf Rx0d0,W
+    bz    opdev1
     
     bcf Datmode,0
     goto  main
@@ -2416,14 +2668,13 @@ set1    btfss Modstat,2   ;awaiting handle confirmation on walkabout?
         subwf   Rx0d3,w         ; HIgh byte of address matches?
         bnz   re_set1g        ; no - reset handset
 
-;   movff Rx0d2,Adr_hi    ;get old address  
-;   movff Rx0d3,Adr_lo
     call  adr_chr     ;set old address for display
+    lfsr  FSR0,Rx0d4    ; Point at speed/direction in ploc packet
     call  setdir      ; Set direction flag and led
 
 set2    movff Rx0d4,Speed1
     bcf Speed1,7    ;clear direction bit
-;   call  ss_send     ;send speed mode to CS
+
     movlw LOW Ss_md   ;recover SS mode
 
 
@@ -2440,8 +2691,8 @@ set2    movff Rx0d4,Speed1
     movwf T3CON     ;set timer 3 now for A/D update rate
     call  spd_chr       ;speed to chars for display
 
-
-    call  lcd_clr     ;display address and speed
+    btfss Datmode,3   ;dev. mode?
+    call  clr_bot     ;clear bottom row
     call  loco_lcd
     bcf   Modstat,2   ;out of confirmation mode
     bcf   Modstat,1   ;has valid handle
@@ -2474,13 +2725,17 @@ set1a   movff Rx0d1,Handle    ;put in handle
     andlw 0x7F
     bnz   setspd        ; Is speed zero?
     call  adc_zero      ; If so, wait for knob to be zero
-    bra   set1b
+        movlw   0                   ; Set current speed to zero
 
-setspd  movwf Speed       ; else set speed to current loco speed
+setspd  movwf Speed       ; Set speed to current loco speed
     movwf Speed1
+    lfsr  FSR0,Rx0d4      ; Point at speed/direction in ploc packet
     call  setdir        ; Set direction
     call  spd_chr       ;speed to chars for display
-    call  lcd_clr       ;display address and speed
+;   call  lcd_clr       ;display address and speed
+    call  clr_top       ;clear top line
+    btfss Datmode,3
+    call  clr_bot       ;if dev mode not set
     call  loco_lcd
     bsf     Locstat,0
 
@@ -2491,9 +2746,9 @@ set1b   bsf   Modstat,4
     goto  main    
 
 
-;  Set direction flag and LED based on dirction in Rx0d4
+;  Set direction flag and LED based on dirction from byte pointed to by FSR0
 
-setdir          btfsc           Rx0d4,7
+setdir  btfsc   INDF0,7
     bra   set_fwd
     bcf   Locstat,7     ;clear direction bit
     bcf   PORTA,1       ;set LED
@@ -2513,6 +2768,9 @@ err   movlw ERR_SESSION_NOT_PRESENT
     subwf Rx0d3,W       ; No session error?
     bz    err_3
 
+    movlw ERR_SESSION_CANCELLED
+    subwf Rx0d3,W       ; Session cancelled error?
+    bz    err_3   
 
         ; These errrors are only valid if we are waiting for a handle on loco select
 
@@ -2546,7 +2804,9 @@ err_1 call  loc_adr       ;loco number on top line
 
         ; LOCO TAKEN ERROR
 
-err_2 call  loc_adr
+err_2 bsf   Dispmode, 2     ; Flag for waiting at "Taken" message
+    bsf   Datmode, 6      ; Set busy flag so does not try to go into accessory mode
+    call  loc_adr
     movlw LOW Str_tkn     ;"TAKEN"
         bra     errnosel        
 
@@ -2572,9 +2832,37 @@ err_3 movf  Handle,w
     bnz   errdun        ; If not, then this error is not for us
 
         btfsc Modstat,2     ; Are we waiting for handle confirmation on walkabout?
-    bra   re_set1             ; If so, then session is not present so normal handset reset
+    bra   re_set1             ; If so, then session is not present 
         btfss Locstat,0     ; Do we have a loco selected?
     bra   errdun        ; No, not for us then
+    
+;   Display session lost or cancelled message
+
+    call  lcd_clr
+    movlw HIGH Sessionstr   ; Session message on top line
+    movwf TBLPTRH
+    movlw LOW Sessionstr  
+    call  lcd_str
+    call  lcd_cr
+
+    movlw ERR_SESSION_CANCELLED
+    subwf Rx0d3,W       ; Session cancelled error?
+    bz    cnmsg
+
+    movlw HIGH Loststr    ; Lost message on bottom line
+    movwf TBLPTRH
+    movlw LOW Loststr     
+    bra   errmsg
+
+
+
+cnmsg movlw HIGH Cancelstr    ; Cancelled message on bottom line
+    movwf TBLPTRH
+    movlw LOW Cancelstr     
+
+errmsg  call  lcd_str
+    bsf   Dispmode,4      ; Error message displayed
+    bsf   Datmode,6     ; Busy flag
     bcf   Modstat,4     ; Matches our active session , so stop keepalive
     bra   relloco       ; then must release loco
 
@@ -2686,7 +2974,37 @@ rd_back call  cv_ans        ;cv answer
     bcf   Datmode,0
     goto  keyback       ;?
 
-
+opdev btfss Datmode,4     ;has a DN?
+    bra   nopdev
+    movf  Rx0d3,W
+    subwf Dev_hi,W
+    bnz   nopdev        ;no match
+    movf  Rx0d4,W
+    subwf Dev_lo,W      
+    bnz   nopdev        ;no match
+    btfsc Rx0d0,0       ;is it ON?
+    bra   op_off
+    bsf   Datmode,5     ;set for next press to be off
+    bra   opdisp        ;update display
+op_off  bcf   Datmode,5     ;set for next press to be off
+opdisp  btfss Datmode,3     ;update display?
+    bra   nopdev        ;not in acc mode on display
+    movlw 0x47
+    call  cur_pos
+    movlw "+"
+    btfsc Datmode,5
+    bra   minus
+    call  lcd_wrt
+    bra   opdate
+minus movlw "-"
+    call  lcd_wrt
+opdate  movlw LOW Dat_save    ;update EEPROM
+    movwf EEADR
+    movf  Datmode,W
+    bcf   WREG,0
+    call  eewrite
+nopdev  bcf   Datmode,0     ;here if a device opcode so check if this CAB also has it.
+    goto  keyback 
 
 
 
@@ -2742,7 +3060,7 @@ setup clrwdt
     movlw LOW Ser_md    ;
     movwf EEADR
     movlw 0
-    call  eewrite     ;deafult service mode
+    call  eewrite     ;default service mode
     clrf  Sermode 
   
   
@@ -2752,14 +3070,11 @@ setup clrwdt
     bsf   RCON,IPEN   ;enable interrupt priority levels
     clrf  BSR       ;set to bank 0
     clrf  EECON1      ;no accesses to program memory  
-    clrf  Datmode
     clrf  Lat0count
         clrf    Lat1count
-    
-
-
     clrf  ECANCON     ;CAN mode 0 for now. 
     clrf  COMSTAT     ;clear any errors
+    
      
     bsf   CANCON,ABAT   ;abort any waiting frames 
     movlw B'10000000'   ;CAN to config mode
@@ -2873,6 +3188,18 @@ loadCG  bcf   LCD_PORT,LCD_RS ; LCD into command mode
     call  lcd_wrt
     bsf   LCD_PORT,LCD_RS ; LCD ready to accept display characters
 
+    movlw 8       ;reload device address and Datmode
+    movwf Count
+    lfsr  FSR0,Datmode
+    movlw LOW Dat_save
+    movwf EEADR
+devld call  eeread
+    movwf POSTINC0
+    incf  EEADR
+    decfsz  Count
+    bra   devld
+    movlw B'00111000'   ;clear all except device bits in Datmode
+    andwf Datmode,F
     
 
 ;clear variables
@@ -2887,6 +3214,7 @@ re_set1a  clrf  Tx1con    ;make sure Tx1con is clear
     clrf  Modstat     ;re enumerate on enter
     clrf  Sermode
     clrf  Setupmode
+    clrf  Dispmode
     lfsr  FSR2,Num1     ;reset pointer
     movlw " "
     movwf Adr1
@@ -2894,31 +3222,46 @@ re_set1a  clrf  Tx1con    ;make sure Tx1con is clear
     movwf Adr3
     movwf Adr4
 
-        lfsr    FSR0,AccStat0
-        movlw   LOW AccStat7+1
-clrstat clrf    POSTINC0        ; clear accessory status bytes 
+        lfsr    FSR0,Cmdmajv
+        movlw   LOW Lastloco+1
+clrstat clrf    POSTINC0        ; clear accessory status bytes and cmd stn ver info
         cpfseq  FSR0L
         bra     clrstat
 
 
-;   call  ldely     ;for now
     clrf  Smode     ;default is 128 SS
     movlw 0x07
     subwf Rx0d0,W     ;is it a reset command
-    bz  re_set1b    ;always a hard reset
+    bz    re_set1b    ;always a hard reset
 
-    bcf PORTC,7     ;for hard reset test. Is the Prog button in?
+    bcf   PORTC,7     ;for hard reset test. Is the Prog button in?
     btfsc PORTB,5     ;clear if in
-    bra re_set4
-re_set1b  movlw LOW E_hndle   ;clear handle
+    bra   re_set4
+
+re_set1b
+    call  lcd_clr
+    call  lcd_home
+    bsf   LCD_PORT,LCD_RS 
+    movlw HIGH Res_str
+    movwf TBLPTRH       
+    movlw LOW Res_str     ;
+    call  lcd_str
+progup  call  dely    ;wait for reset release
+    btfss PORTB,5
+    bra   progup
+    call  lcd_clr
+    call  lcd_home
+    bsf   PORTC,7
+
+    movlw LOW E_hndle   ;clear handle
     movwf Eadr
         movlw   4
         movwf   Ecount
     movlw 0xFF
     call  eefill
     setf  Handle
-    bcf Datmode,0
-    bra re_set1     ;hard reset
+    bcf   Datmode,0
+    bra   re_set1     ;hard reset
     
 
 ;   test for walkaround
@@ -2939,7 +3282,7 @@ re_set4a  bsf PORTC,5
 
 ;   here if handle is set in EEPROM
     
-    movff W_temp,Handle           ; keep hadle to check against PLOC
+    movff W_temp,Handle           ; keep handle to check against PLOC
         movlw   LOW E_addr              ; Get saved address to check against PLOC
         movwf   EEADR
         call    eeread
@@ -2950,14 +3293,14 @@ re_set4a  bsf PORTC,5
 
     call  newid1      ;reinstate CANid to RAM etc. (current CANid in EEPROM)
     clrf  Modstat
-    bsf Modstat,0   ;has got CAN_ID
+    bsf   Modstat,0   ;has got CAN_ID
     movlw B'11100000'
     clrf  PIR3
     movwf INTCON      ;enable interrupts
 
-    bsf Modstat,2   ;set flag for handle confirm
+    bsf   Modstat,2   ;set flag for handle confirm
     clrf  Locstat     ;no loco selected
-    bsf Locstat,7   ;default to forward   
+    bsf   Locstat,7   ;default to forward   
     movlw 0x22      ;query engine (QLOC)
     movwf Tx1d0
     movff Handle,Tx1d1
@@ -2966,12 +3309,29 @@ re_set4a  bsf PORTC,5
   
     call  sendTXa
 
+    
+    btfss Datmode,4   ;has dev. no set
+    bra   re_set2
+    call  devdisp1    ;put up old dev. display
+    
+
     bra   re_set2     ;continue
     
 
 re_set1 clrf  INTCON
     setf  Handle
+    movlw 8         ;clear device address and Datmode
+    movwf Count
+    movlw LOW Dat_save
+    movwf EEADR
+    lfsr  FSR0,Datmode
     
+re_st1  clrf  WREG
+    call  eewrite
+    incf  EEADR
+    clrf  POSTINC0
+    decfsz  Count
+    bra   re_st1
     call  clr_fun         ;clear function table
     
     
@@ -2989,18 +3349,18 @@ re_set1 clrf  INTCON
     movwf TBLPTRH    
     movlw LOW Verstr
     call  lcd_str
-        movlw   Major_Ver           ; Show major version number
+        movlw   MAJOR_VER           ; Show major version number
         addlw   0x30                ; Will need to change this when we get to major version 10
         call    lcd_wrt
-    movlw Minor_Ver     ; add minor version letter
+    movlw MINOR_VER     ; add minor version letter
     call  lcd_wrt
 
 ; This bit is for developer test versions only.
 ; It displays the build number in the lcd display 
 ; so we can confirm the new version has been loaded or bootloaded
 
-#ifdef test_ver
-    movlw build_no
+#if BETA_VER != 0
+    movlw BETA_VER
     addlw 0x30
     call  lcd_wrt
 #endif
@@ -3024,6 +3384,7 @@ re_set2 clrf  Fnmode        ;holds function range
     clrf  Keyflag
     clrf  TMR0H
     clrf  TMR0L
+
     movlw B'10000111'   ;set Timer 0 for keepalive, enable now for title delay
     movwf T0CON
     clrf  PIR3
@@ -3032,7 +3393,7 @@ re_set2 clrf  Fnmode        ;holds function range
     movwf T3CON     ;set timer 3 now for A/D update rate (moved here so can detect knob move before a loco selected in case of recover from emergency stop all
     movlw B'11100000'   ;reenable interrupts
     movwf INTCON      ;enable interrupts
-    bcf   Datmode,0
+;   bcf   Datmode,0
     goto  main
 
     ; Disply loco prompt after title delay
@@ -3045,7 +3406,7 @@ clear_title
 
 locprmpt
     call  lcd_clr
-;   call  lcd_home
+
     bsf   LCD_PORT,LCD_RS 
     movlw HIGH Selstr
     movwf TBLPTRH       
@@ -3111,14 +3472,13 @@ sendTXa         lfsr  FSR0, Tx1con
 
 ; Send TXi entry point is used when called from the LP ISR - Tx0dlc loaded by caller
 
-sendTXi         lfsr  FSR0, Tx0con
+sendTXi lfsr  FSR0, Tx0con
     lfsr  FSR1, TXB0CON
-                movlw   .10
-                movwf   Lat0count
+        movlw   .10
+        movwf   Lat0count
 
-sendTX          clrf  INDF0     ; Tx?con    ;prevents false send if TXREQ is set by mistake
-;   movf  Dlc,W     ;get data length
-;   movwf Tx1dlc
+sendTX  clrf  INDF0     ; Tx?con    ;prevents false send if TXREQ is set by mistake
+
     movlw B'00001111'   ;clear old priority
     andwf PREINC0,F   ; Tx?sidh
     movlw B'10110000'
@@ -3131,26 +3491,21 @@ sendTX          clrf  INDF0     ; Tx?con    ;prevents false send if TXREQ is set
 ;   Send contents of Tx1 buffer via CAN TXB1
 
 sendTX1 
-;   lfsr  FSR0,Tx1con   ; now set in calling routine so can use different buffers
-;   lfsr  FSR1,TXB1CON
+
     clrf  COMSTAT
-;   movlb .15       ;check for buffer access
+
 tx1test clrwdt
     btfsc INDF1,TXREQ   ; TXB?CON
     bra   tx1test
-;   movlb 0
     movf  FSR0L,w
     addlw .14       ; limit for tx buffer size
 ldTX1 movff POSTINC0,POSTINC1
-;   movf  POSTINC0,W
-;   movwf POSTINC1  ;load TXB1
-;   movlw Tx1d7+1
     cpfseq  FSR0L
     bra   ldTX1
 
   
-;   movlb .15       ;bank 15
-    movlw .14
+      
+    movlw .14       ; bank 14
     subwf FSR1L     ; put pointer back
     movlw 2
     bcf   PLUSW1,EXIDE  ; TXB?CON  test for a fault?
@@ -3159,8 +3514,6 @@ ldTX1 movff POSTINC0,POSTINC1
 tx1done btfsc INDF1,TXREQ   ; TXB?CON check if sent
     bra   tx1done
 
-    
-;   movlb 0       ;bank 0
     return          ;successful send
 
     
@@ -3418,6 +3771,29 @@ lcd_clr bcf   LCD_PORT,LCD_RS   ;control register
     bsf   LCD_PORT,LCD_RS   ;data register
     return
 
+;*******************************************************
+;
+;   clears one line of LCD
+
+clr_top movlw 0
+    call  cur_pos
+    call  clr_line
+    return
+clr_bot movlw 0x40
+    call  cur_pos
+    call  clr_line
+    return
+
+clr_line  movlw 8
+    movwf Chr_cnt
+    movlw " "
+clr_ln1 call  lcd_wrt
+    decfsz  Chr_cnt
+    bra   clr_ln1
+    return
+
+
+
 ;******************************************************************************
 ;
 ;   LCD write string  load W with start of string in EEPROM
@@ -3469,32 +3845,7 @@ a_done  btfsc ADCON0,GO
     subwf Speed,W
     bz    nospeed     ;has not changed
     movff Adtemp,Speed  ;new speed for change detection
-;     movf  Smode,F     ;is it 128 step?
-;   bz    s_128
-;   movlw 1
-;   subwf Smode,W
-;   bz    s_14      ;14 SS
-;   movlw .12       ;here for 28 SS
-;   addwf Speed,W 
-;   btfss WREG,7      ;overflow
-;   bra   s_28a
-;   movlw .127
-;s_28a  movwf Speed1
-;   movlw .15
-;   cpfsgt  Speed1      ;don't send less than 16
-;   clrf  Speed1
-;   bra   a_d_2     ;finish
 
-;s_14 movlw .8
-;   addwf Speed,W 
-;   btfss WREG,7      ;overflow
-;   bra   s_14a
-;   movlw .127
-;s_14a  movwf Speed1
-;   movlw .15
-;   cpfsgt  Speed1
-;   clrf  Speed1      ;don't send less than 16
-;   bra   a_d_2     ;finish
     
 s_128 movf  Adtemp,W
     addlw 1
@@ -3504,10 +3855,7 @@ s_128 movf  Adtemp,W
     decf  Speed1,W
     bnz   a_d_2     ;not a 1
     clrf  Speed1      ;don't send a 1
-a_d_2 
-    
-  
-    bsf   Datmode,2   ;flag speed change
+a_d_2 bsf   Datmode,2   ;flag speed change
 nospeed return
     
 ;**************************************************************************
@@ -3592,7 +3940,28 @@ devconv clrf  Dev_hi
     mulwf INDF2
     movf  PRODL,W
     addwf Dev_hi,F
-last_dev 
+last_dev movlw  LOW Dat_save+1    ;save new dev number in EEPROM
+    movwf EEADR
+    movf  Dev_hi,W
+    call  eewrite
+    incf  EEADR
+    movf  Dev_lo,W
+    call  eewrite
+    incf  EEADR
+    movf  Ddr1,W
+    call  eewrite
+    incf  EEADR
+    movf  Ddr2,W
+    call  eewrite
+    incf  EEADR
+    movf  Ddr3,W
+    call  eewrite
+    incf  EEADR
+    movf  Ddr4,W
+    call  eewrite
+    incf  EEADR
+    movf  Devcnt,W
+    call  eewrite
     
     return
 
@@ -3717,23 +4086,35 @@ add_tst movf  CVnum_hi,F
 
 ;
 ;   get handle for loco from CS
+;   Enter with w=0 for normal request, or w=GLOC flags for steal/share
 ;   returns with 0 in W if allocated, not 0 if error
 ;
-get_handle movlw  0x40    ;request loco handle
+get_handle 
+    iorlw 0       ; Flags set for steal/share?
+    bz    doRloc      ; No - use RLOC for compatibility with older CS
+    movwf Tx1d3     ; flags for steal or share
+    movlw OPC_GLOC    ; request loco handle, GLOC opcode for steal/share
+    movwf Tx1d0     ; set opcode
+    movlw 4       ; Length of GLOC packet
+    bra   rqloc
+  
+doRloc  movlw OPC_RLOC    ;request loco handle
     movwf Tx1d0
+    movlw 3
+rqloc movwf Dlc       ; Enter here with opcode set and length in w
     movff Adr_hi,Tx1d1
     movff Adr_lo,Tx1d2
-    movlw 3
-    movwf Dlc
     bsf   Modstat,1   ;set mode for answer
     call  sendTXa     ;send request
     return
+
 
 ;********************************************************************
 ;
 ;   display loco number and speed on top line
 
-loco_lcd; call  lcd_clr       ;clear screen
+loco_lcd
+      call  clr_top
       call  lcd_home
     
       bsf   LCD_PORT,LCD_RS
@@ -4140,10 +4521,6 @@ spd1  return
 kp_pkt  movlw OPC_DKEEP   ;keep alive packet
     movwf Tx0d0
     movff Handle,Tx0d1
-  
-;   movff Speed1,Tx1d2
-;   btfsc Locstat,7
-;   bsf   Tx1d2,7     ;direction bit
     movlw 2
     movwf Tx0dlc
     call  sendTXi     ;send command, use TXi entry point as this is called from ISR
@@ -4192,11 +4569,8 @@ frn0  movff Key_temp,Fnum
 
 funchk  call  get_fun
     movwf Fn_temp
-;   call  mom_set
     btfss Fn_temp,1     ;is it mom  mode?
     bra   toggle
-;   btfss Fn_tog,1
-;   bra   toggle
     btfsc Fn_tog,0      ;forced off
     bra   fn_on
     bcf   Fn_temp,0
@@ -4229,7 +4603,6 @@ f_send  movf  Fnmode,F      ;is it range 0?
     movwf Tx1d2
     movlw B'00001111'
     andwf Funtemp,W
-;        movwf   Funtemp
     btfsc Fn_temp,0   ;on or off?
     bra   on1
     comf  WREG
@@ -4237,10 +4610,10 @@ f_send  movf  Fnmode,F      ;is it range 0?
     bra   on1a
 on1   iorwf Fr2,F     ;on
 on1a  movff Fr2,Tx1d3
-;       lfsr    FSR2,Fr2
+
     bra   fnframe     ;send frame
 
-;funsn1 return
+
 
 not_fr2 btfss Funtemp,7
     bra   not_fr3
@@ -4248,7 +4621,7 @@ not_fr2 btfss Funtemp,7
     movwf Tx1d2
     movlw B'00001111'
     andwf Funtemp,W
-;        movwf   Funtemp
+
     btfsc Fn_temp,0   ;on or off?
     bra   on2
     comf  WREG
@@ -4257,14 +4630,12 @@ not_fr2 btfss Funtemp,7
 on2   iorwf Fr3,F 
   
 on2a  movff Fr3,Tx1d3
-;        lfsr    FSR2,Fr3
     bra   fnframe     ;send frame
 
 not_fr3 movlw 1
     movwf Tx1d2
     movlw B'00011111'
     andwf Funtemp,W
-;        movwf   Funtemp
     btfsc Fn_temp,0   ;on or off?
     bra   on3
     comf  WREG
@@ -4272,7 +4643,6 @@ not_fr3 movlw 1
     bra   on3a
 on3   iorwf Fr1,F 
 on3a  movff Fr1,Tx1d3
-;        lfsr    FSR2, Fr1
     bra   fnframe     ;send frame
 
 fr3   btfsc Fnmode,1
@@ -4290,7 +4660,6 @@ fr3   btfsc Fnmode,1
     movwf Tx1d2
     movlw B'00001111'
     andwf Funtemp,W
- ;       movwf   Funtemp
     btfsc Fn_temp,0   ;on or off?
     bra   on4
     comf  WREG
@@ -4298,16 +4667,14 @@ fr3   btfsc Fnmode,1
     bra   on4a
 on4   iorwf Fr3,F 
 on4a  movff Fr3,Tx1d3
-;        lfsr    FSR2,Fr3
     bra   fnframe     ;send frame
 
-fr4   movlw LOW Fnbits3   ;F13 to F19
+fr4   movlw LOW Fnbits3   ;F13 to F20
     addwf Key_temp,W
     movwf EEADR
     movlw 3
     subwf EEADR     ;start at 0 if 3 (F13 is first of Fr4)
     call  eeread
-;        movwf   Funtemp
     btfsc Fn_temp,0   ;on or off?
     bra   on5
     comf  WREG
@@ -4317,19 +4684,23 @@ on5   iorwf Fr4,F
 on5a  movff Fr4,Tx1d3
     movlw 4
     movwf Tx1d2
-;        lfsr    FSR2,Fr4
     bra   fnframe
 
 fr5   movlw 9         ;check for 29 - invalid
     subwf Key_temp,W
     bnz   fr5_ok
     return
-fr5_ok    movlw LOW Fnbits4   ;F20 to F28
+fr5_ok  movf  Key_temp,F      ;is it zero (Fn20)?
+    bnz   fr5a        ;no
+    movlw 0x0A        ;make Key = 10
+    movwf Key_temp
+    bra   fr4         ;send as F20
+fr5a  movlw LOW Fnbits4   ;F21 to F28
     addwf Key_temp,W
+    decf  WREG
     movwf EEADR
     
     call  eeread
-;        movwf   Funtemp
     btfsc Fn_temp,0   ;on or off?
     bra   on6
     comf  WREG
@@ -4396,8 +4767,13 @@ fdisp           movlw 0x40      ; Position cursor start of line 2
     movlw "2"       ; Yes - set display char
     call  lcd_wrt     ; Display tens digit of function number
 
-fn_lo movf  Key_temp,W    ; Get numeric key pressed
-    addlw 0x30      ; Convert to ASCII
+fn_lo     ; Get numeric key pressed
+    movlw 0x0A      ; is it 10? (used for F20)
+    subwf Key_temp,W
+    bnz   fn_lo2
+    bra   fn_lo3      ; W is zero
+fn_lo2  movf  Key_temp,W    ; recover original
+fn_lo3  addlw 0x30      ; Convert to ASCII
     call  lcd_wrt     ; Display function number
         movlw   0x20      ; and a space
         call    lcd_wrt
@@ -4431,7 +4807,6 @@ fnshowoff
     movwf TBLPTRH
     movlw LOW Mom_ofstr
     bra   fnshow
-;   bcf   Tog_flg,6
     bcf   Locstat,3
     bcf   Locstat,1
     
@@ -4467,7 +4842,6 @@ con2  call  lcd_clr       ;set a consist
     movlw " "
     call  lcd_wrt
     bsf   Locstat,2     ;consist mode
-;   bcf   Locstat,0
     lfsr  FSR2,Con1
     clrf  Numcount
     return
@@ -4565,7 +4939,6 @@ prog_sub  clrf  Numcount
       andwf Progmode,W    ;is it set at all 
       bnz   prog_1
       nop
-;     bcf   Locstat,0   ;disable loco
       clrf  CVnum1
       clrf  CVnum2
       clrf  CVnum3
@@ -4812,7 +5185,6 @@ cvv_disp  movf  CVval1,W
 ;
 dir_sub   btfss Locstat,0   ;no loco
     bra   dir_back
-;   movff Speed,Speed1
     btfss Locstat,7
     bra   fwd
     bcf   Locstat,7
@@ -4847,8 +5219,6 @@ em_sub  btfsc Locstat,4 ; Already in emergency stop mode?
 
 ems_mod btfss Locstat,0 ; valid loco?
     bra   em_back     ; 
-;   movf  Speed,F   ;is speed zero
-;   bz    em_back   
     movlw 1     
     movwf Speed1
     call  beep    ;beep on em stop
@@ -5069,13 +5439,7 @@ enum  clrf  Tx1con      ;CAN ID enumeration. Send RTR frame, start timer
     clrf  Tx1dlc      ;prevent more RTR frames
     return
     
-;************************************************************
-;
-;   send speed packet for keepalive
-;
-; keep  bcf   INTCON,TMR0IF ;clear timer flag
-;   call  spd_pkt
-;   return
+
 
 ;**************************************************************
 
@@ -5188,7 +5552,7 @@ sm_inc    incf  Smode
 
 ;     set new SS on enter
 
-ss_set                  movlw LOW Ss_md
+ss_set      movlw LOW Ss_md
       movwf EEADR
       movf  Smode,W
       call  eewrite       ;save curent ss mode
@@ -5221,7 +5585,7 @@ ss_send   movlw OPC_STMOD   ;STMOD
 parasend  
     movlw 0xEF
     movwf Tx1d0
-    movlw LOW node_ID
+    movlw LOW nodeprm
     movwf TBLPTRL
     movlw 8
     movwf TBLPTRH
@@ -5279,7 +5643,6 @@ here    movf  Roll,W
       bra   here
 here2   movlw .99         ;limit to ID
       cpfslt  IDcount
-      ;movwf  IDcount
       call  segful        ;CAN segment full
       movff Fsr_tmp1Le,FSR1L  ;
       movff Fsr_tmp1He,FSR1H 
@@ -5312,9 +5675,9 @@ segful    movlw 0xFF      ;default ID unallocated
 
 para1rd movlw OPC_PARAN
     movwf Tx1d0
-    movlw LOW node_ID
+    movlw LOW nodeprm
     movwf TBLPTRL
-    movlw HIGH node_ID
+    movlw HIGH nodeprm
     movwf TBLPTRH   ;relocated code
     decf  Rx0d3,W
     addwf TBLPTRL
@@ -5340,9 +5703,9 @@ sndinf  movlw OPC_PNN
     movwf Tx1d1
     movf  NN_templ,w
     movwf Tx1d2
-    movlw Man_no
+    movlw MAN_NO
     movwf Tx1d3
-    movlw Module_id
+    movlw MODULE_ID
     movwf Tx1d4
     movlw NODEFLGS
     movwf Tx1d5
@@ -5352,39 +5715,106 @@ sndinf  movlw OPC_PNN
     return
 
 
-;*******************************************************
+;**********************************************************
 
-devdisp ;call lcd_clr
+;   store command station information from STAT packet
+
+storinf lfsr  FSR0, Rx0d5
+    lfsr  FSR1, Cmdmajv
+    movff POSTINC0,POSTINC1   ; Not worth a loop for 3 bytes
+    movff POSTINC0,POSTINC1
+    movff POSTINC0,POSTINC1
+    return
+
+
+;*******************************************************
+;
+;   display device select message
+devdisp 
     movlw 0x40
     call  cur_pos
     movlw HIGH Acstr
     movwf TBLPTRH
     movlw LOW Acstr
     call  lcd_str
-  ; call  lcd_cr
     movlw HIGH Str_equ
     movwf TBLPTRH
     movlw LOW Str_equ
     call  lcd_str
-  ; movlw " "
-  ; call  lcd_wrt
+  
     movlw 0x47
     call  cur_pos
     movlw "+"
     call  lcd_wrt
+    
+ddisp0  movlw 0x43      ;set to number entry point
+    call  cur_pos
+    movlw " "       ;clear old number
+    call  lcd_wrt
+    movlw " "
+    call  lcd_wrt
+    movlw " "
+    call  lcd_wrt
+    movlw " "
+    call  lcd_wrt
+    movlw 0x43      ;reset to number entry point
+    call  cur_pos
+    bcf   Datmode,5   ;polarity to +
+    return
+
+devdisp1            ;refresh display if dev no already set
+    movlw 0x40
+    call  cur_pos
+    movlw HIGH Acstr
+    movwf TBLPTRH
+    movlw LOW Acstr
+    call  lcd_str
+
+    movlw HIGH Str_equ
+    movwf TBLPTRH
+    movlw LOW Str_equ
+    call  lcd_str
+  
+    movlw 0x47
+    call  cur_pos
+    btfsc Datmode,5   ;what was polarity
+    bra   ddisp3
+    movlw "+"
+    call  lcd_wrt
+    bra   ddisp4
+ddisp3  movlw "-"
+    call  lcd_wrt
+ddisp4  movlw 0x43      ;set to number entry point
+    call  cur_pos
+    movlw " "       ;clear space
+    call  lcd_wrt
+    movlw " "
+    call  lcd_wrt
+    movlw " "
+    call  lcd_wrt
+    movlw " "
+    call  lcd_wrt
+  
     movlw 0x43      ;set to number entry point
     call  cur_pos
-    movlw " "
+    movff Devcnt,Tempd    ;number of digits
+    movf  Devcnt,F    ;any digits set?
+    bz    ddisp0      ;no so clear
+    movf  Ddr1,W
     call  lcd_wrt
-    movlw " "
+    decf  Tempd,F
+    bz    ddisp2
+    movf  Ddr2,W
     call  lcd_wrt
-    movlw " "
+    decf  Tempd,F
+    bz    ddisp2
+    movf  Ddr3,W
     call  lcd_wrt
-    movlw " "
+    decf  Tempd,F
+    bz    ddisp2
+    movf  Ddr4,W
     call  lcd_wrt
-    movlw 0x43      ;set to number entry point
-    call  cur_pos
-    bcf   Datmode,5
+ddisp2
     return
 
 dev_nr  bcf   LCD_PORT,LCD_RS   ;to control
@@ -5406,6 +5836,10 @@ set_cur bcf   LCD_PORT,LCD_RS   ;to control
     bsf   WREG,7      
     call  lcd_wrt
     bsf   LCD_PORT,LCD_RS
+    movlw LOW Dat_save    ;save status in EEPROM
+    movwf EEADR
+    movf  Datmode,W
+    call  eewrite
     return
 
 ;*******************************************************************
@@ -5474,7 +5908,7 @@ funback return
 ;*********************************************************
 ;   get function status from EEPROM
 
-get_fun         movlw LOW Fn_stat
+get_fun movlw LOW Fn_stat
     addwf Fnum,W
     movwf EEADR
     call  eeread
@@ -5484,7 +5918,7 @@ get_fun         movlw LOW Fn_stat
 ;
 ;   set function status in EEPROM
 ;
-set_fun         movwf Temp    ;save fn byte
+set_fun movwf Temp    ;save fn byte
     movlw LOW Fn_stat
     addwf Fnum,W
     movwf EEADR
@@ -5588,8 +6022,8 @@ mom_out bcf   PORTC,5     ;con key still out?
     btfsc PORTB,0
     bra   mom_out1    ;yes
     bsf   PORTC,5
-;   clrf  Tog_flg     ;not in now
     retlw 0
+
 mom_out1 bsf    PORTC,5
     clrwdt
     decfsz  Debcount    ;count from FF to 00
@@ -5598,21 +6032,17 @@ mom_out1 bsf    PORTC,5
     btfsc PORTB,0
     bra   mom_out2    ;still out
     bsf   PORTC,5
-;   clrf  Tog_flg     ;not out now
     retlw 1
-mom_out2 bsf    PORTC,5
-;   clrf  Tog_flg     ;finished
+
+mom_out2 bsf    PORTC,5   ;finished
     retlw 0 
 
 ;********************************************************
 ;
 ;   set momentary for FN buttons
 ;
-momset  ;movlw  .13       ;only FNs 0 to 12 can be set for mom.
-    ;subwf  Fnum,W
-  ; bn    mom1
-  ; bra   no_set
-mom1            movlw LOW Fn_stat
+momset  
+mom1    movlw LOW Fn_stat
     addwf Fnum,W      ;point to EEPROM for status
     movwf EEADR
     call  eeread
@@ -5735,21 +6165,21 @@ Keytbl  de  0x0A,1    ;DIR, 1
 
 ; Function bits lookup
 
-Fnbits1         de  B'00010000',B'00000001'
+Fnbits1 de  B'00010000',B'00000001'
     de  B'00000010',B'00000100'
     de  B'00001000',B'01000001'
     de  B'01000010',B'01000100'
     de  B'01001000',B'10000001'
 
-Fnbits2         de  B'10000010',B'10000100'
+Fnbits2 de  B'10000010',B'10000100'
     de  B'10001000',0xFF
 
-Fnbits3         de  B'00000001',B'00000010'
+Fnbits3 de  B'00000001',B'00000010'
     de  B'00000100',B'00001000'
     de  B'00010000',B'00100000'
     de  B'01000000',B'10000000'
 
-Fnbits4         de  B'00000001',B'00000010'
+Fnbits4 de  B'00000001',B'00000010'
     de  B'00000100',B'00001000'
     de  B'00010000',B'00100000'
     de  B'01000000',B'10000000'
@@ -5761,7 +6191,8 @@ Fnbits4         de  B'00000001',B'00000010'
 ;   Bit 1 - Set if momentary
 
 
-Fn_stat         de  0,0   ;function status.
+Fn_stat
+        de  0,0   ;function status.
     de  0,0
     de  0,0
     de  0,0
@@ -5776,6 +6207,12 @@ Fn_stat         de  0,0   ;function status.
     de  0,0
     de  0,0
 Fn_stat_lst de  0,0
+
+Dat_save  de  0,0   ;save status and device numbers for walkaround
+      de  0,0
+      de  0,0
+      de  0,0
+    
 
 
 

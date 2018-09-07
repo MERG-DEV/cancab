@@ -3,9 +3,10 @@
 ;
 ; American English   2nd May 2011 - Pete Brownlow
 ;
-; Version 2p - 12 Feb 2012 - Some changes in length, mom strings added
+; Version 2q,2s - 2012 - new strings added
+;   (added at version 2qBeta, released at version 2s)
 
-; Use with CANCAB firmware version 2p onwards
+; Use with CANCAB firmware version 2q onwards
 ; 
 ;
 ; LCD display width is 8 characters.
@@ -110,7 +111,7 @@ Segful  db  "Segment",0,0           ; 8   First line of "Segment full", displaye
                         ;   devices are already present (>110) so cannot self-enumerate.
 DispStr db  "Dspatch?",0            ; 8   Release a loco whilst moving
 Spdsstr db  "Speed",0             ; 5   Current loco speed when taking over moving loco (must leave 3 chars for speed value)
-Stlstr  db  "Force?",0,0,0            ; 8   For forced takover of a loco already taken
+Stlstr  db  "Steal?",0,0,0            ; 8   For forced takover of a loco already taken
 Stupstr db  "SETUP",0,0,0,0           ; 8
 Cabstr  db  "CAB",0,0,0,0,0,0         ; 8
 Cmdstr  db  "CMD STN",0,0           ; 8
@@ -143,12 +144,20 @@ Testing db  "Testing",0,0           ; 8
 Teststr db  0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f,0 ; 8
 TeststEnd 
 
-; New strings added 21/9/11 at end of table
+; New strings added from 21/9/11 at end of table
 
 Firmstr db  "Firmware",0            ; 8   Displayed during boot load
 Updstr  db  "Update",0,0,0            ; 8   Displayed during boot load
 Mom_onstr db  "Mom+",0            ; 4   Momentary on. used for Fn keys
 Mom_ofstr db  "Mom-",0            ; 4   Momentary off
+
+; Strings new for version 2q,r,s
+
+Res_str   db  "Reset",0,0,0,0         ; 8   Reset message
+Sharestr  db  "Share?",0,0,0          ; 8   Sharing cabs
+Sessionstr  db  "SESSION",0,0         ; 8   Session cancelled when stolen (forced) by another cab
+Cancelstr db  "CANCELED",0          ; 8
+Loststr   db  "LOST",0,0,0,0,0        ; 8   Session lost when timed out or not there when reconnect after walkabout too late
 
 ;***************************************************************************************************
 ;
@@ -217,6 +226,7 @@ Char0F  db  B'00000010',B'00000100' ; É
     db  B'00011100',B'00010000'
     db  B'00011110',B'00000000'
 Custend 
+
 
 
 
