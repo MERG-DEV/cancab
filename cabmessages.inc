@@ -1,7 +1,7 @@
 ;
 ; Text strings for use on CANCAB LCD display 
 ;
-; Version 2d - American English   2nd May 2011 - Pete Brownlow
+; Version 2l - American English   2nd May 2011 - Pete Brownlow
 ;
 ; Use with CANCAB firmware version 2d onwards
 ; 
@@ -75,11 +75,11 @@ Titlstr db  "MERG CAB",0            ; 8
 Verstr  db  "Ver ",0,0              ; 5
 Selstr  db  "SEL LOCO",0            ; 8
 Selstep db  "SEL STEP",0            ; 8
-Stopstr db  "STOP!",0,0,0,0           ; 8
+Stopstr db  "STOP!   ",0            ; 8
 EmStopstr db "STOP ALL",0           ; 8
 Relstr  db  "RELEASE?",0            ; 8
-Fr1lbl  db  "Fr1  ",0             ; 5
-Fr2lbl  db  "Fr2  ",0             ; 5
+Fr1lbl  db  "Fr1     ",0            ; 8
+Fr2lbl  db  "Fr2     ",0            ; 8
 Fnumstr db  "     F",0              ; 6
 Constr  db  "Consist",0,0           ; 8
 Conclr  db  "clear?",0,0,0            ; 8
@@ -120,8 +120,8 @@ Monstr  db  "MONITOR",0,0           ; 8   Monitor CBUS packets
 Curstr  db  "Current",0,0           ; 8   Electrical current
 FliMstr db  "FLiM Set",0            ; 8   Enters FLiM setup mode
 NodeStr db  "Node id?",0            ; 8   For manual FLiM node setting
-Onstr db  "On ",0               ; 3
-Offstr  db  "Off",0               ; 3
+Onstr db  "On  ",0              ; 4
+Offstr  db  "Off ",0              ; 4
 Silstr  db  "Silent",0,0,0            ; 8   Silent mode option
 Stp2rv  db  "Stop2rev",0            ; 8   Require loco stopped before can reverse option
 Wlktstr db  "WalkTime",0            ; 8   Walkabout timeout
@@ -140,6 +140,14 @@ Testing db  "Testing",0,0           ; 8
 
 Teststr db  0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f,0 ; 8
 TeststEnd 
+
+; New strings added 21/9/11 at end of table
+
+Firmstr db  "Firmware",0            ; 8   Displayed during boot load
+Updstr  db  "Update",0,0,0            ; 8   Displayed during boot load
+Mom_onstr db  "Mom+",0            ; 4   Momentary on. used for Fn keys
+Mom_ofstr db  "Mom-",0            ; 4   Momentary off
+
 
 ;***************************************************************************************************
 ;
