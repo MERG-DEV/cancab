@@ -204,6 +204,8 @@
 ; v2s   28/04/14 MPB - correction to Fn ranges 13 to 20 amd 21 to 28
 ; V2sBeta1  04/05/14 PNB - Update parameter block to latest spec including BETA_VER, use cbusdefs8h
 ; V2s       25/05/14 PNB - Build for release
+;       07/02/19 CFW - Use Fr1 and Fr2 to send On and Off to an addressed device
+;                      as well as Consist to send toggling On Off messages
 
 
 
@@ -221,7 +223,7 @@
 
 MAN_NO      equ MANU_MERG ;manufacturer number
 MAJOR_VER   equ 2
-MINOR_VER   equ "s"
+MINOR_VER   equ "?"
 BETA_VER    equ 0           ; Beta build number: Set to zero for a release build
 MODULE_ID   equ MTYP_CANCAB ; id to identify this type of module
 EVT_NUM     equ 0           ; Number of events
@@ -320,6 +322,7 @@ MAX_FUN  equ    27
 #define CMD_BOOT_TEST   0x04
 #define FN_OUT1             ;standard Fn outputs
 ;#define  FN_OUT2           ;uses DFNON / DFNOFF
+#define DEV_TGL  B'00100000'  ; Mask to toggle device action between On and Off
 
 
 
@@ -1765,8 +1768,21 @@ keyback bsf   Keyflag,0
     goto  main
 
 enter1  goto  enter
-fr1a  goto  fr1
-fr2a  goto  fr2
+
+fr1a
+    btfss Datmode,3   ; Skip if in device mode ...
+    goto  fr1         ; ... else process key as normal
+
+    bcf   Datmode,5   ; Set device action to On
+    bra   dev_set
+
+fr2a  
+    btfss Datmode,3   ; Skip if in device mode ...
+    goto  fr2         ; ... else process key as normal
+
+    bsf   Datmode,5   ; Set device action to Off
+    bra   dev_set
+
 proga goto  prog
 
 ;   set direction
@@ -1804,18 +1820,12 @@ cons1 bsf   Datmode,6   ;busy
 
 dev_tog movf  Devcnt,F
     bz    keyback     ;no number entered
-    btfss Datmode,4
-    call  devconv     ;first time so convert number
-    bsf   Datmode,4
-    btfsc Datmode,5
-    bra   set_rev
-    bsf   Datmode,5
-    call  dev_nr
-    call  devout      ;send short event
-    bra   keyback
-set_rev bcf   Datmode,5
-    call  dev_nr
-    call  devout      ;send short event
+    movlw DEV_TGL     ; Toggle device action ...
+    xorwf Datmode,F   ; ... between On and Off
+dev_set
+    call  devconv     ; If necessary convert device number
+    call  dev_nr      ; Update display
+    call  devout      ; Send short event
     bra   keyback
 
 ; When loco taken, consist key toggles between steal or share prompt
@@ -2044,8 +2054,7 @@ ssmode  btfsc Progmode,6    ;in test mode?
     call  ss_mode     ;do speed step sequence
     bra   keyback
 
-fr1   btfsc Datmode,3   ;device mode?
-    bra   keyback
+fr1
     btfsc Modstat,7
     bra   keyback
 
@@ -2156,8 +2165,7 @@ con_clr movlw 0x45
     bcf   Datmode,6   ;not busy
     bra   keyback
 
-fr2   btfsc Datmode,3   ;in device mode?
-    bra   keyback
+fr2
     btfsc Modstat,7
     goto  keyback
     btfsc Progmode,4    ;service mode?
@@ -3909,7 +3917,11 @@ long  bsf   Adr_hi,7      ;set top two bits for long address
 
     ;convert the 4 device digits to two HEX bytes
 
-devconv clrf  Dev_hi
+devconv
+    btfsc Datmode,4   ; Skip if device info not already set ...
+    return            ; ... otherwise do nothing
+
+    clrf  Dev_hi
     clrf  Dev_lo
     decf  FSR2L
     
@@ -3963,6 +3975,7 @@ last_dev movlw  LOW Dat_save+1    ;save new dev number in EEPROM
     movf  Devcnt,W
     call  eewrite
     
+    bsf   Datmode,4   ; Flag device info as set
     return
 
 ;**************************************************************************
