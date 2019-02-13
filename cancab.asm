@@ -331,8 +331,6 @@ MAX_FUN  equ    27
 #define CMD_CHK_RUN   0x03
 #define CMD_BOOT_TEST   0x04
 #define FN_OUT1             ;standard Fn outputs
-;#define  FN_OUT2           ;uses DFNON / DFNOFF
-#define DEV_TGL  B'00100000'  ; Mask to toggle device action between On and Off
 
 
 
@@ -1854,8 +1852,9 @@ dev_tog movf  Devcnt,F
     call  devconv     ;first time so convert number
     call  stat_req
     bra   keyback
+
 devtg_1 call  devout      ;send short event
-    btg   Datmode,5
+    btg   Datmode,5   ; Toggle device action between On and Off
     call  dev_nr
 tog_out
     bcf   Datmode,7   ;done
