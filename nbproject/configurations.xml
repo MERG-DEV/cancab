@@ -483,6 +483,54 @@
         <property key="extended-mode-mpasm" value="false"/>
         <property key="extended-mode-mplink" value="false"/>
       </mpasmsuite>
+      <sdcc-config>
+        <property key="V-show-commands-compiler" value="false"/>
+        <property key="Werror" value="false"/>
+        <property key="allow-unsafe-read" value="false"/>
+        <property key="calltree" value="false"/>
+        <property key="debug-ralloc" value="false"/>
+        <property key="debug-xtra14" value="false"/>
+        <property key="debug-xtra16" value="false"/>
+        <property key="denable-peeps" value="false"/>
+        <property key="extended" value="false"/>
+        <property key="gstack" value="false"/>
+        <property key="ivt-loc" value=""/>
+        <property key="no-c-code-in-asm" value="false"/>
+        <property key="no-crt" value="false"/>
+        <property key="no-extended-instr" value="false"/>
+        <property key="no-optimize-goto" value="false"/>
+        <property key="no-pcode-opt" value="false"/>
+        <property key="no-peep" value="false"/>
+        <property key="no-peep-return" value="false"/>
+        <property key="no-xinit-opt" value="false"/>
+        <property key="nodefaultlibs" value="false"/>
+        <property key="nogcse" value="false"/>
+        <property key="noinduction" value="false"/>
+        <property key="noinvariant" value="false"/>
+        <property key="nojtbound" value="false"/>
+        <property key="nolabelopt" value="false"/>
+        <property key="noloopreverse" value="false"/>
+        <property key="nolospre" value="false"/>
+        <property key="nooverlay" value="false"/>
+        <property key="obanksel" value="0"/>
+        <property key="opt-code-size" value="false"/>
+        <property key="opt-code-speed" value="false"/>
+        <property key="optimize-cmp" value="false"/>
+        <property key="optimize-df" value="false"/>
+        <property key="pcode-verbose" value="false"/>
+        <property key="peep-asm" value="false"/>
+        <property key="peep-return" value="false"/>
+        <property key="pno-banksel" value="false"/>
+        <property key="preplace-udata-with" value=""/>
+        <property key="pstack-model" value="small"/>
+        <property key="stack-loc" value=""/>
+        <property key="stack-size14" value=""/>
+        <property key="use-crt" value=""/>
+        <property key="use-non-free" value="true"/>
+        <property key="user-defines" value=""/>
+        <property key="user-includes" value=""/>
+        <property key="verbose" value="false"/>
+      </sdcc-config>
     </conf>
   </confs>
 </configurationDescriptor>
