@@ -1,5 +1,5 @@
 ;   	TITLE		"Source for DCC CAB for CBUS"
-; 		; filename cancab_v2u.asm	14/02/19
+; 		; filename cancab_v2uBeta1.asm	17/02/19
 ; 
 ;      All source code is copyright (C) the author(s) concerned
 ;       	(c) Mike Bolton 2009-2012
@@ -212,6 +212,7 @@
 ; v2u		14/02/19  Update to 2t3 for accessory toggle.  (MPB)
 ;                     Added block for CV values >127 for CV1 and >255 for other CVs
 ;					  Tested 15/02/19  Set as release version.
+; v2uBeta1	17/02/19  As 2u but mod to speed dispaly and A/D conversion
 
 
 
@@ -230,7 +231,7 @@
 MAN_NO      equ	MANU_MERG	;manufacturer number
 MAJOR_VER   equ 2
 MINOR_VER   equ	"u"
-BETA_VER    equ 0         	 ; Beta build number: Set to zero for a release build
+BETA_VER    equ 1         	 ; Beta build number: Set to zero for a release build
 MODULE_ID   equ MTYP_CANCAB ; id to identify this type of module
 EVT_NUM     equ 0           ; Number of events
 EVperEVT    equ 0           ; Event variables per event
@@ -1962,7 +1963,7 @@ clear
 		call	loco_lcd
 		call	lcd_cr
 
- 		movf    Speed,w             ; If speed is none zero, this is a dispatch
+ 		movf    Speed,W             ; If speed is non zero, this is a dispatch
         bnz     dspatch	
         bra     disprel
 
@@ -2721,7 +2722,7 @@ set1    btfss	Modstat,2		;awaiting handle confirmation on walkabout?
 		call 	setdir			; Set direction flag and led
 
 set2    movff	Rx0d4,Speed1
-		bcf	Speed1,7		;clear direction bit
+		bcf		Speed1,7		;clear direction bit
 
 		movlw	LOW Ss_md		;recover SS mode
 
@@ -2779,8 +2780,11 @@ set1a   movff	Rx0d1,Handle		;put in handle
 		call	adc_zero			; If so, wait for knob to be zero
         movlw   0                   ; Set current speed to zero
 
-setspd  movwf	Speed				; Set speed to current loco speed
-		movwf	Speed1
+setspd  movwf	Speed1				; Set speed to current loco speed
+		movf	Speed1,F			; what is it
+		bz		setspd1
+		decf	Speed1,W			;subtract1
+setspd1	movwf	Speed
 		lfsr	FSR0,Rx0d4			; Point at speed/direction in ploc packet
 		call	setdir				; Set direction
 		call	spd_chr				;speed to chars for display
@@ -4039,13 +4043,16 @@ a_done	btfsc	ADCON0,GO
 
 		
 s_128	movf	Adtemp,W
-		addlw	1
-		btfsc	WREG,7			;not 128?
-		decf	WREG			;keep at 127
-		movwf	Speed1
-		decf	Speed1,W
-		bnz		a_d_2			;not a 1
-		clrf	Speed1			;don't send a 1
+		bz		a_d_3			;is zero
+		
+		movff	Adtemp,Speed1
+		incf	Speed1			;add 1 to Speed1 to send
+		btfsc	Speed1,7		;overflow?
+		decf	Speed1			;keep to 127
+		bra		a_d_2			;send it
+		
+		
+a_d_3	clrf	Speed1			;send a 0
 a_d_2	bsf		Datmode,2		;flag speed change
 nospeed	return
 		
