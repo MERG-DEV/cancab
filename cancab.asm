@@ -1,8 +1,8 @@
 ;   	TITLE		"Source for DCC CAB for CBUS"
-; 		; filename cancab4a.asm	27/07/18
+; 		; filename cancab4cBeta2.asm	11/01/20
 ; 
 ;      All source code is copyright (C) the author(s) concerned
-;       	(c) Mike Bolton 2009-2012
+;       	(c) Mike Bolton 2009-2019
 ;			With some modifications (c) Pete Brownlow and (c) Roger Healey
 ;			as detailed in the revision history below
 ;
@@ -54,6 +54,10 @@
 ; Use command station firmware cancmd_n or later for full functionality of emergency stop all
 ; Use command station firmware cancmd3b or later for correct service mode programming of all decoders
 
+; Series 4 (CAB2) has backlit display and option for encoder or pot for speed.
+; Construction is now all through hole.
+; Encoder or pot selected with J3 (PORTA,ENC). If hi = pot, if lo = enc.
+
 
 ; The setup timer is TMR3. 
 ; CAN bit rate of 125 Kbits/sec
@@ -74,6 +78,10 @@
 ;					 Reads RXB0 directly. With this buffer, any overflow is lost.
 ;					 Could add busy mechanism to prevent this is needed.
 ; Beta 4.  07/02/19  Added code for TO toggle test. (MB)
+; Beta 5.  26/02/19  Fix for return from AC mode (MB)
+; v4b Beta 1	09/03/19 As 4aBeta5 but with the pot option selected by RA5 (MB)
+; v4c Beta 1	21/09/19 As 4b Beta 1 but is revised dual code for encoder or pot.
+; v4c Beta 2	11/01/20 As 4c Beta 1 but with encoder mods by SW. 
 
 
 
@@ -87,12 +95,13 @@
   include "cbuslib/cbusdefs.inc"
 	include "cabmessages.inc"	; Version of messages file only changes if messages are added or message lengths changed
 
+
 ; Define the node parameters to be stored at nodeprm
 
 MAN_NO      equ	MANU_MERG	;manufacturer number
 MAJOR_VER   equ 4
-MINOR_VER   equ	"a"
-BETA_VER    equ 4         	 ; Beta build number: Set to zero for a release build
+MINOR_VER   equ	"c"
+BETA_VER    equ 2         	 ; Beta build number: Set to zero for a release build
 MODULE_ID   equ MTYP_CANCAB ; id to identify this type of module
 EVT_NUM     equ 0           ; Number of events
 EVperEVT    equ 0           ; Event variables per event
@@ -149,6 +158,9 @@ LED2	equ		7	;RB7 is the green LED on the PCB
 
 ENC_PORT equ 	PORTA		;encoder port. PORTA, PA1 and PA2
 ENC_SW		equ	3	;swtch on encoder. PORTA, PA3
+ENC		equ 5		;enc / pot select bit
+ENC_RATSENS	equ 0x3F ;SW Rate sensitivity, 7F is original, reducing will make less sensitive
+					 ;SW don't reduce ENC_RATESENS<1 and less than 10h will do single steps
 
 
 ; definitions used by bootloader
@@ -367,7 +379,7 @@ ENC_SW		equ	3	;swtch on encoder. PORTA, PA3
 				;bit 4 set if device info ready to send
 				;bit 5 set if device action is an OFF (clear for an ON - as default)
 				;bit 6 busy flag
-				;bit 7 used for tornout toggle mode
+				;bit 7 used for turnout toggle mode
 	Dev_hi		;hi byte of device number
 	Dev_lo		;lo byte of device number
 	Ddr1		;Device ASCII address
@@ -491,32 +503,14 @@ ENC_SW		equ	3	;swtch on encoder. PORTA, PA3
 					;the above variables must be in access space (00 to 5F)
 				
 	
-
-	
-	
-;	RXB0CON			;start of receive packet 0
-;	Rx0sidh
-;	Rx0sidl
-;;	Rx0eidh
-;	Rx0eidl
-;	RXB0DLC
-;	RXB0D0
-;	RXB0D1
-;	RXB0D2
-;	RXB0D3
-;	RXB0D4
-;	RXB0D5
-;	RXB0D6
-;	RXB0D7
-	
 	Cmdtmp		;command temp for number of bytes in frame jump table
 	
 	
 	
 	
 	Eadr		;temp eeprom address
-        Eval
-        Ecount
+    Eval
+    Ecount
 	
 	Tx0con			;start of transmit frame  0
 	Tx0sidh
@@ -782,7 +776,7 @@ _CANInit:
 	movwf	BRGCON2	
 	movlw	CAN_BRGCON3	
 	movwf	BRGCON3	
-;	movlb	0
+
 	movlb	.15
 	clrf	ANCON0
 	clrf	ANCON1
@@ -792,10 +786,8 @@ _CANInit:
 	
 	
 	clrf	CANCON	; Enter Normal mode
-;	movlw	B'00001110'
-;	movwf	ADCON1
-;	bcf		LED_PORT,LED1
-;	bcf		LED_PORT,LED2
+	bcf		TRISB,LED2			;set LED port to outputs
+	bcf		TRISB,LED1
 	bsf		LED_PORT,LED2		;FWD LED on  Both LEDs on to indicate boot mode
 	bsf		LED_PORT,LED1		;REV LED
 
@@ -1428,19 +1420,13 @@ not_yet		movff	BSR_tempL,BSR
 
 ;*********************************************************************
 
-main	;btfss	Progmode,4		;service mode?
-		;bra		main1
-		;btfss	Progmode,3
-		;bra		main1
-		;movlw	B'00011100'		;test for multiple writes
-		;andwf	Sermode,W
-		;sublw	B'00001000'		;but 3 set and 2 and 4 clear
-		;bnz		main1
-		;call	wrt_lng			;write next byte
+main	
 		
 
 	
 main1	;clrwdt					;clear watchdog
+		btfsc	ENC_PORT,ENC		;is it an encoder
+		bra		pot				;no
 		btfss	PIR4,TMR4IF		;timer 4 rollover? Used for encoder rate dependency, 4mSec time.
 		bra		enc_sw			;no
 		bcf		PIR4,TMR4IF
@@ -1448,9 +1434,9 @@ main1	;clrwdt					;clear watchdog
 		bz		enc_sw			;yes so do nothing
 		decf	Count4,F		;decrement by 1 every 4 mSec
 
-;	This code is for an encoder only.
+;	This code is for an encoder 
 			
-enc_sw	btfsc	PORTA,3			;is encoder button in? (no debounde used here)
+enc_sw	btfsc	ENC_PORT,3			;is encoder button in? (no debounce used here)
 		bra		enc_up
 		btfsc	Enc_sw,0		;first time?
 		bra		enc_up
@@ -1461,6 +1447,15 @@ enc_sw	btfsc	PORTA,3			;is encoder button in? (no debounde used here)
 enc_up	btfss	PORTA,3			;encoder button out?
 		bra		main1d			;still in
 		bcf		Enc_sw,0		;button up so clear flag
+		bra		main1d
+
+;	This code for a pot only.
+
+pot		btfss	PIR2,TMR3IF		;is it time for an A/D
+		bra		main1d
+		bcf		PIR2,TMR3IF
+		call	a_to_d			;get speed
+		
 
 main1d	btfss	PIR1,TMR1IF		;for beep duration or response timer
 		bra		main1c
@@ -1476,7 +1471,7 @@ main1e		decfsz	Beep			;needs x4 with 16 MHz
 		bra		main1c
 		bcf		T2CON,TMR2ON	;beep off
 		bcf		T1CON,TMR1ON
-;		bcf		PIR1,TMR1IF
+
 
 main1c	btfss	PIR1,TMR2IF		;is it T2 rollover
 		bra		main1b
@@ -1485,7 +1480,7 @@ main1c	btfss	PIR1,TMR2IF		;is it T2 rollover
 		bcf		PIR1,TMR2IF
 		btg		LATC,2			;output square wave
 		clrwdt					;clear watchdog
-;		bcf		PIR1,TMR1IF	
+	
 
 main1b	btfsc	Datmode,0		;any new CAN frame received?
 		goto	packet			;yes
@@ -1536,7 +1531,7 @@ stop1	movlw	1               ; in emergency stop, need speed to be zero before al
 		bra		main4
 		call	locdisp
 		call	spd_pkt
-;		bra		main3
+
 main4	btfsc	Datmode,6		;busy?
 		bra		main3
 		btfss	Datmode,3		;device mode
@@ -1572,7 +1567,7 @@ main2b	btfss	Datmode,3		; in dev. mode?
 		btfsc	Datmode,4		; device already set?
 		call	devdisp1		; display complete device info. 
 		
-;		bra		main3
+
 
 
 sndspd	call	spd_pkt	        ; Send new changed speed
@@ -1581,7 +1576,9 @@ sndspd	call	spd_pkt	        ; Send new changed speed
 								
 		;kaypad scanning routine and encoder scan
 
-main3	;btg		PORTA,0			;clock for sample timing (temporary)
+main3	
+		btfsc	ENC_PORT,ENC		;is at an encoder?
+		bra		main3a			;no
 		
 		movlw	B'00000110'		;mask except input A,B
 		andwf	PORTA,W
@@ -1609,6 +1606,9 @@ main3	;btg		PORTA,0			;clock for sample timing (temporary)
 		movlw	6
 		subwf	Enc_stat,W		;is it state 6?
 		bz		enc6
+		movlw	7				;SW Extra state added by SW for debounce
+		subwf	Enc_stat,W		;SW is it state 7 for debounce
+		bz		enc7			;SW
 		bra		main3a			;shouldn't ever be here
 
 enc0	movlw	1
@@ -1643,11 +1643,7 @@ enc3	movlw	3				;state 3. Is it 11?
 		subwf	Atemp,W
 		bz		enc3a
 		bra		main3a
-enc3a	;movlw	0x7F			;speed max?
-		;subwf	Speed,W
-		;bz		no_spd			;don't increment
-;		movf	Speed,F			;is speed 0
-;		bz		no_spd			;don't send
+enc3a	
 		movf	Count4,W		;get time from last step
 		rrncf	WREG			;divide by 16
 		rrncf	WREG
@@ -1659,7 +1655,7 @@ enc3a	;movlw	0x7F			;speed max?
 		bnn		enc3b			;less than 127 
 		movlw	0x7F			;127 max
 enc3b	movwf	Speed			;new speed
-		movlw	0x7F			;for counter
+		movlw	ENC_RATSENS		;for counter
 		movwf	Count4			;for next step
 		
 		movff	Speed,Speed1	;for send
@@ -1668,7 +1664,9 @@ enc3b	movwf	Speed			;new speed
 		bz		no_spd1
 		incf	Speed1			;miss out speed 1
 no_spd1	bsf		Datmode,2		;flag speed change
-no_spd	clrf	Enc_stat		;back to state 0
+no_spd	movlw	7				;SW move to state 7 for debounce
+		movwf	Enc_stat		;SW
+	
 		bra		main3a
 
 
@@ -1692,9 +1690,7 @@ enc6	movlw	3				;state 3. Is it 11?
 		subwf	Atemp,W
 		bz		enc6a
 		bra		main3a
-enc6a	;movf	Speed,W
-		;bz		no_spd			;don't decrement
-
+enc6a	
 		movf	Count4,W		;get time from last step
 		rrncf	WREG			;divide by 16
 		rrncf	WREG
@@ -1708,7 +1704,6 @@ enc6a	;movf	Speed,W
 enc6c	movwf	Speed
 		movlw	0x7F			;for counter
 		movwf	Count4			;for next step
-		;decf	Speed			;decrement
 		movff	Speed,Speed1
 		movf	Speed,F
 		bz		enc6b			;don't increment if zero
@@ -1716,7 +1711,11 @@ enc6c	movwf	Speed
 enc6b	bsf		Datmode,2		;flag speed change
 		bra		no_spd
 
-
+enc7	movlw	ENC_RATSENS		;SW state 7. Has 4ms passed yet
+		subwf	Count4,W		;SW
+		bnz		enc7a			;SW 4ms now passed
+		bra		main3a			;SW 4ms not passed yet
+enc7a	clrf	Enc_stat		;SW onto state 0 now 4ms has passed
 
 
 main3a	btfsc	Keyflag,0		;continue
@@ -1925,7 +1924,7 @@ tkprmt	call	lcd_str
 
 ;	loco key  (does various things)
 
-loco	clrf	Datmode				;clear everyhing
+loco	
 		call	lcd_clr
 		bcf		Datmode,6			;clear busy flag always
 		clrf	Progmode
@@ -2084,11 +2083,11 @@ entcnt	btfsc	Dispmode,4		; Error message displayed?
 		btfsc	Progmode,7
 		call	ss_set
 		btfss	Modstat,0		;got CAN ID?
-;		call	setloop			;get CAN_ID
+
 		call	self_en
-		movlw	B'10110101'
-;		movwf	T3CON			;set timer 3 now for A/D update rate
-;		btfss	Locstat,0
+		movlw	B'00110011'
+		movwf	T3CON			;set timer 3 now for A/D update rate
+		btfss	Locstat,0
 		call	beep
 		bcf		Modstat,3		;clear reset flag
 		btfsc	Locstat,1		;release mode?
@@ -2430,8 +2429,10 @@ cvval1	subwf	Numcount,W
 		bra		nonum
 
 devmode	btfss	Modstat,0		;got CAN ID?
-;		call	setloop			;get CAN_ID
+
 		call	self_en
+		movlw	B'00110011'
+		movwf	T3CON			;set timer 3 now for A/D update rate
 		btfsc	Modstat,7		;in stop mode?
 		goto	keyback
 
@@ -2440,8 +2441,7 @@ devmode	btfss	Modstat,0		;got CAN ID?
 		btfsc	Datmode,4
 		bra		devset1
 		call	devdisp			;clear existing dev no.for edit
-;		bra		devset			;
-;devset2	call	devdisp1
+
 
 devset	bsf		Datmode,3		;set to dev mode
 		btfsc	Datmode,4		;already used in dev mode?
@@ -2675,7 +2675,7 @@ hndopc	btfsc	Modstat,1		;request handle response?
 		btfsc	Modstat,2		;handle check?
 		bra		hand_set
 		bra		hs2				;other packets?
-;		bra		pktdun
+
 
 est_pkt call	ems_mod			; Put handset into emergency stop
 		call	beep
@@ -2790,8 +2790,8 @@ set2    movff	RXB0D4,Speed1
 		call	beep				;confirm 
 		bsf		T0CON,TMR0ON		;start keepalive timer interrupt
 		bsf		Modstat,4		; keepalive flag
-;		movlw	B'10110101'
-;		movwf	T3CON			;set timer 3 now for A/D update rate
+		movlw	B'00110011'
+		movwf	T3CON			;set timer 3 now for A/D update rate
 		call	spd_chr				;speed to chars for display
 
 		btfss	Datmode,3		;dev. mode?
@@ -2830,9 +2830,11 @@ set1a   movff	RXB0D1,Handle		;put in handle
 		call	ss_send	
 		movf	RXB0D4,w				; Get speed
 		andlw	0x7F
-;		bnz		setspd				; Is speed zero?
-;		call	adc_zero			; If so, wait for knob to be zero (not with encoder)
-;       movlw   0                   ; Set current speed to zero
+		btfss	ENC_PORT,ENC
+		bra		setspd
+
+		call	adc_zero			; If so, wait for knob to be zero (not with encoder)
+        movlw   0                   ; Set current speed to zero
 
 setspd  				; Set speed to current loco speed
 		movwf	Speed1
@@ -2843,7 +2845,7 @@ setsp1	movwf	Speed
 		lfsr	FSR0,RXB0D4			; Point at speed/direction in ploc packet
 		call	setdir				; Set direction
 		call	spd_chr				;speed to chars for display
-;		call	lcd_clr				;display address and speed
+
 		call	clr_top				;clear top line
 		btfss	Datmode,3
 		call	clr_bot				;if dev mode not set
@@ -3132,7 +3134,7 @@ longadr	call	lng_conv			;convert long address to HEX (OTM prog)
 		call	sendTXa
 		bcf		Locstat,0			;no loco selected
 
-		movlw	0x40				;RLOC
+		movlw	OPC_RLOC			;RLOC
 		movwf	Tx1d0
 		movff	L_adr_hi,Tx1d1
 		bsf		Tx1d1,6
@@ -3146,9 +3148,7 @@ longadr	call	lng_conv			;convert long address to HEX (OTM prog)
 		clrf	Progmode
 		bcf		Locstat,6			;out of prog mode
 		bcf		Datmode,6			;not busy
-;		call	lcd_clr
-;		call	loco_lcd
-;		bsf		Locstat,0			;re-enable loco
+
 		goto	keyback
 l_err	bcf		Progmode,2
 		nop							;needs changing here?
@@ -3262,7 +3262,7 @@ opdate	movlw	LOW	Dat_save		;update EEPROM
 		call	eewrite
 		btfsc	Datmode,7			;toggle button?
 		goto	devtg_1				;do toggle
-;		btg		Datmode,5			;change pol for old toggle
+
 nopdev	bcf		Datmode,0			
 		bcf		RXB0CON,RXFUL
 		goto	keyback	
@@ -3276,46 +3276,64 @@ nopdev	bcf		Datmode,0
 setup	clrwdt
 		clrf	INTCON			;no interrupts yet
 		movlb	.15
-		clrf	ANCON0
+		clrf	WREG			;ANCON0 = 0
+		btfsc	ENC_PORT,ENC
+		movlw	B'00000001'		;for pot input
+		movwf	ANCON0
 		clrf	ANCON1
+	
 		clrf	CM1CON			;disable comparator
 		clrf	CM2CON
+		clrf	T3GCON			;disable T3 gate control
 		clrf	INTCON2			
 		bcf		INTCON2,7		;weak pullups on
 		setf	WPUB			;all pullups on
 		movlb	0
 
+		movlw	B'00101110'		;Port A for encoder/pot select on PA5.								
+		movwf	TRISA			;
+		nop
+		nop
+
 ;	This is for a pot.
 
-;		movlw	B'00000001'		;A/D enabled
-;		movwf	ADCON0			;
-;		movlw	B'00001110'		;A/D on PORTA,0, rest are digital
-;		movwf	ADCON1
-;		movlw	B'00000101'		;set sampling rate
-;		movwf	ADCON2
+		movf	ENC_PORT,W
 
+		btfss	WREG,ENC		;is it an encoder
+		bra		pset2			;yes
+
+		movlw	B'00000001'		;A/D enabled. Channel 0
+		movwf	ADCON0			;
+		movlw	B'00000000'		;A/D on PORTA,0, rest are digital
+		movwf	ADCON1
+		movlw	B'00111110'		;set sampling rate
+		movwf	ADCON2
+		bsf		TRISA,0			;A/D input for pot
+		bra		pset1
+
+pset2	
+		movlw	B'00000110'		
+		andwf	ENC_PORT,W		;read PORTA for encoder 
+		movwf	Atemp
+		clrf	Enc_stat		;encoder state
 	
 		
 		;port settings will be hardware dependent. RB2 and RB3 are for CAN.
 		;set S_PORT and S_BIT to correspond to port used for setup.
 		;rest are hardware options
 		
-		clrf	PORTA
-		clrf	PORTB
+pset1	
 		clrf	KEY_PORT
-		movlw	B'00101110'		;Port A for encoder and select on PA5.
-								;if using a pot, set bit 0 for input.
-								
-		movwf	TRISA			;
+	
 		movlw	B'00111011'		;RB0 RB1 keypad rows 1 and 2
 								;RB2 = CANTX, RB3 = CANRX, 
 								;RB4 RB5 are keypad rows 3 and 4
 		movwf	TRISB
-	
+		clrf	PORTB
 		bsf		PORTB,2			;CAN recessive
 		movlw	B'00000000'		;Port C  column drive and LCD drive. RC2 is sounder output (PWM)
 		movwf	TRISC
-
+		clrf	PORTC
 		lfsr	FSR0, 0			; clear page 1
 		
 nextram	clrf	POSTINC0
@@ -3332,13 +3350,11 @@ nextram	clrf	POSTINC0
 		movlw	0x9F
 		movwf	PR2
 
-		movlw	B'00000110'		
-		andwf	PORTA,W			;read PORTA for encoder / Pot
-		movwf	Atemp
+		
 		movlw	4
 		movwf	Deb4			;for debounce counter
 
-		clrf	Enc_stat		;encoder state
+		
 		
 		movlw	LOW	Ser_md		;
 		movwf	EEADR
@@ -3355,10 +3371,9 @@ nextram	clrf	POSTINC0
 		clrf	EECON1			;no accesses to program memory	
 		clrf	Lat0count
         clrf    Lat1count
-;		clrf	ECANCON			;CAN mode 0 for now. 
+
 		clrf	COMSTAT			;clear any errors
-		
-		 
+				 
 		bsf		CANCON,ABAT		;abort any waiting frames	
 		
 		bsf		CANCON,7		;CAN to config mode
@@ -3454,6 +3469,8 @@ mskloop	clrf	POSTINC0
 		movlw	B'00110011'		;reset and 4 bit mode
 		call	lcd_wrt
 		movlw	B'00110010'		;reset and 4 bit mode sequence
+		call	lcd_wrt
+		movlw	B'00101000'		;SW extra reset and 4 bit mode sequence required for winstar display
 		call	lcd_wrt
 		movlw	B'00101000'		;2 lines, 5x7 dots
 		call	lcd_wrt
@@ -3704,8 +3721,8 @@ re_set2	clrf	Fnmode				;holds function range
 		movwf	T0count			;4 cycles needed now
 		movlw	B'01111111'
 		movwf	T4CON			;set timer 4 for encoder rate. Free running. PIR4,TMR4IF every 4.096 mSec
-;		movlw	B'10010101'
-;		movwf	T3CON			;set timer 3 now for A/D update rate (moved here so can detect knob move before a loco selected in case of recover from emergency stop all
+		movlw	B'00110011'
+		movwf	T3CON			;set timer 3 now for A/D update rate (moved here so can detect knob move before a loco selected in case of recover from emergency stop all
 		movlw	B'11100000'		;reenable interrupts
 		movwf	INTCON			;enable interrupts
 ;		bcf		Datmode,0
@@ -3825,7 +3842,7 @@ clr_en
 		bcf		PIR2,TMR3IF
 		movlw	4				;x4 count at 16 MHz
 		movwf	T3count
-		movlw	B'00111010'		;B'00110000'
+		movlw	B'00110010'		;B'00110000'
 		movwf	T3CON
 		clrf	TMR3H
 		clrf	TMR3L
@@ -4299,13 +4316,18 @@ a_done	btfsc	ADCON0,GO
 
 		
 s_128	movf	Adtemp,W
-		addlw	1
-		btfsc	WREG,7			;not 128?
-		decf	WREG			;keep at 127
-		movwf	Speed1
-		decf	Speed1,W
-		bnz		a_d_2			;not a 1
-		clrf	Speed1			;don't send a 1
+		bz		a_d_3			;is zero
+
+		movff	Adtemp,Speed1
+		incf	Speed1			;add 1 to Speed1 to send
+		btfsc	Speed1,7		;overflow?
+		decf	Speed1			;keep to 127
+		bra		a_d_2			;send it
+		
+		
+a_d_3	clrf	Speed1			;send a 0
+
+	
 a_d_2	bsf		Datmode,2		;flag speed change
 nospeed	return
 		
@@ -5382,9 +5404,9 @@ cvv_conv	decf	FSR2L
 		mulwf	POSTDEC2
 		movf	PRODL,W
 		addwf	CVval,F
-		bc		noCVval
-		movf	PRODH,F
-		bnz		noCVval
+		bc		noCVval				;no carry if <256
+		movf	PRODH,F			
+		bnz		noCVval				;never be a PRODH if <256
 		
 		
 last_cvv	retlw	0
@@ -5741,12 +5763,21 @@ emsdisp	movlw	0x40
 ;		loco not enabled till speed is zero. (safety feature)
 ;
 adc_zero	clrwdt	
-;		call	a_to_d
-;		movlw	2		;is speed 0 or 1
-;		cpfslt	Adtemp
-;		bra	adc_zero
-		bsf	Locstat,0
-;		movff	Adtemp,Speed1
+		bsf		T2CON,TMR2ON
+		btfss	PIR1,TMR2IF		;beep rollover?
+		bra		zero_1
+		movlw	0x9F			;rese T2
+		movwf	PR2
+		bcf		PIR1,TMR2IF
+		btg		LATC,2			;beep out
+		
+zero_1	call	a_to_d
+		movlw	2		;is speed 0 or 1
+		cpfslt	Adtemp
+		bra		adc_zero
+		bcf		T2CON,TMR2ON		;stop beep
+		bsf		Locstat,0
+		movff	Adtemp,Speed1
 		clrf	Speed1
 		call	lcd_clr
 		call	loco_lcd
@@ -5766,18 +5797,7 @@ beep	movlw	B'00110010'
 		bsf		T2CON,TMR2ON
 		return
 
-;beep1	btfss	PIR1,TMR2IF
-		;bra		beep1
-		;btg		LATC,2			;output
-		;bcf		PIR1,TMR2IF
-		;btfss	PIR1,TMR1IF		;T1 out
-		;bra		beep1			;no
-		;bcf		PIR1,TMR1IF
-		;decfsz	Beep
-		;bra		beep1
-		;bcf		T2CON,TMR2ON	;stop
 
-		;return
 
 
 ;****************************************************************************
@@ -6068,7 +6088,7 @@ enum	clrf	Tx1con			;CAN ID enumeration. Send RTR frame, start timer
 		
 		movlw	4
 		movwf	T3count
-		movlw	B'00111010'
+		movlw	B'00110010'
 		movwf	T3CON			;enable timer 3
 		clrf	TMR3H
 		clrf	TMR3L

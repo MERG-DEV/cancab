@@ -53,7 +53,7 @@
 
 
 
-  org 0x3000
+  org 0x4000
 
 ; LCD text strings
 
@@ -183,7 +183,7 @@ Loststr   db  "LOST",0,0,0,0,0        ; 8   Session lost when timed out or not t
 ;
 ; This table is for French characters with accents
 
-    org 0x3800
+    org 0x4800
 
 Custchars
 Char08  db  B'00001000',B'00000100' ; à
