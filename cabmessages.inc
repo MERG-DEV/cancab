@@ -1,7 +1,7 @@
 ;
 ; Text strings for use on CANCAB LCD display 
 ;
-; American English   2nd May 2011 - Pete Brownlow
+;q  American English   2nd May 2011 - Pete Brownlow
 ;
 ; Version 2q,2s - 2012 - new strings added
 ;   (added at version 2qBeta, released at version 2s)
@@ -53,7 +53,7 @@
 
 
 
-  org 0x4000
+  org 0x5000
 
 ; LCD text strings
 
@@ -183,7 +183,7 @@ Loststr   db  "LOST",0,0,0,0,0        ; 8   Session lost when timed out or not t
 ;
 ; This table is for French characters with accents
 
-    org 0x4800
+    org 0x3800
 
 Custchars
 Char08  db  B'00001000',B'00000100' ; à
