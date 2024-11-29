@@ -6,6 +6,7 @@
 ;	Version 2q,2s - 2012 - new strings added
 ;		(added at version 2qBeta, released at version 2s)
 ;	Version 2u - 14/04/2022 - SW - added EEwrite error message
+;	Version 2v - 28/02/2023 - SW - added Spd Step message
 ;
 ;	Use with CANCAB firmware version 2q onwards
 ; 
@@ -161,7 +162,7 @@ Loststr		db	"LOST",0,0,0,0,0				; 8		Session lost when timed out or not there wh
 
 ; Strings new for version 2u
 Err_eewr	db	"Err EEwr",0					; 8	Displayed to help diagnose if have to re-write to EEPROM
-
+Spdstepstr	db	"Spd Step",0					; 8	
 TeststEnd									; end of strings marker
 
 ;***************************************************************************************************

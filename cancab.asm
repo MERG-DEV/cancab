@@ -118,6 +118,12 @@
 ;			    Modified enc3 and enc6 to take account of different speed steps so that one encoder detent = 1 speed step
 ;			    regardless of speed step mode.
 ; v4g		02/01/23 SW Code version changed to full release for first production kits. Identical to 4fBeta3 apart from release no.
+; v4g Beta1	30/01/23 SW Share speed mirroring when in encoder mode by adding new subroutine setshrspd called from chkdspd.
+;     Beta2	04/02/23 SW Added speed step restore to that last used on power up as suggested by Neale Brodie
+;     Beta3	28/02/23 SW Display speed step setting on power up if not the default 128 - needs updated cabmessages2v.inc for new "Spd Step"
+;			    message. When doing display clear have changed from ldely to dely as 2.5ms plenty long enough for display clear
+;			    command to execute
+; v4h		08/03/23 SW Code version changed to full release for use with production kits. Identical to 4gBeta3 apart from release no.
 
 ; Assembly option
 	LIST	P=18F25K80,r=hex,N=75,C=120,T=ON
@@ -127,14 +133,13 @@
 	;definitions  Change these to suit hardware.
 
 	include	"cbuslib/cbusdefs.inc"
-
 	include "cabmessages.inc"	; Version of messages file only changes if messages are added or message lengths changed
 
 ; Define the node parameters to be stored at nodeprm
 
 MAN_NO      equ	MANU_MERG	;manufacturer number
 MAJOR_VER   equ 4
-MINOR_VER   equ	"g"
+MINOR_VER   equ	"h"
 BETA_VER    equ 0         	 ; Beta build number: Set to zero for a release build
 MODULE_ID   equ MTYP_CANCAB ; id to identify this type of module
 EVT_NUM     equ 0           ; Number of events
@@ -354,7 +359,7 @@ ENC_RATESENS	equ 0x3F ;SW Rate sensitivity, 7F is original, reducing will make l
 	Speed1		;speed to send to loco
 	Speed2		;used in speed to ASCII conversion
 
-	Smode		;speed step mode
+	Smode		;speed step mode ss128=0, ss28=2, ss14=1, will use bit 7 as temp flag if need to display ss mode on startup
 
 	Handle		;handle given by CS
 
@@ -1425,9 +1430,9 @@ lpint	movwf	W_tempL
 		movff	FSR2L,Fsr_temp2Li
 		movff	FSR2H,Fsr_temp2Hi
 		movff	BSR,BSR_tempL
-		bcf		INTCON,TMR0IF	;clear flag
+		bcf	INTCON,TMR0IF	;clear flag
 		decfsz	T0count
-		bra		not_yet
+		bra	not_yet
 		movlw	4
 		movwf	T0count
 		btfsc	Modstat,4		;no keepalive
@@ -2589,7 +2594,7 @@ chkls   movlw   LOW TeststEnd
 
 packet	movlw	0x07			;is it a reset frame
 		subwf	RXB0D0,W
-		bz		re_set			;system reset
+		bz	re_set			;system reset
 		movlw	0x4C
 		subwf	RXB0D0,W
 		bz		serr1			;service mode reply (ack or error)
@@ -2665,16 +2670,10 @@ chkfun	movf	Handle,w
 
 chkdspd	movf	Handle,w
 		subwf	RXB0D1,W			; Does it match our handle?
-		bnz		pktdun			; If not, then this packet is not for us
-		lfsr	FSR0,RXB0D2		; Point at speed/direction in dspd packet
-		call 	setdir			; Set direction flag and led
-		movlw	0x7F
-		andwf	INDF0,w			; Get speed
-		sublw	1				; Is speed 1 (emergency stop?)
-		bnz		pktdun
-		bcf		Locstat,4		; So em_sub doesn't think this is a double press
-		call 	em_sub			; Emergency stop
-		bra		pktdun
+		bnz	pktdun			; If not, then this packet is not for us
+		call	setshrspd		;SW need to move all share speed to subroutine else branches in above code fail
+
+		bra	pktdun
 
 hndopc	btfsc	Modstat,1		;request handle response?
 		bra		hand_set		;do other frames here
@@ -2838,7 +2837,7 @@ set1a   movff	RXB0D1,Handle		;put in handle
 		call	ss_send
 		movf	RXB0D4,w				; Get speed
 		andlw	0x7F
-		btfss	Pot_enc_sta,0	    ;SW for pot need additional check for zero but not with encoder
+		btfss	Pot_enc_sta,0	    ;SW for pot need additional check for zero but not with encoder (bit 0 is 1 for pot, 0 for encoder)
 		bra	setspd		    ;as encoder set speed
 		bnz	setspd		    ;SW here if is a pot and if speed not zero go and set it
 		call	adc_zero	    ;If zero, wait for knob to be zero (not with encoder)
@@ -2881,7 +2880,30 @@ set_fwd         bsf		Locstat,7
 		bsf		LED_PORT,LED2
 dirret	return
 
+;  Set shared speed on display
+setshrspd	lfsr	FSR0,RXB0D2		; Point at speed/direction in dspd packet
+		call 	setdir			; Set direction flag and led
+		movlw	0x7F
+		andwf	INDF0,w			; Get speed
+		sublw	1			; Is speed 1 (emergency stop?)
+		bnz	shrspeed		; SW set speed as shared
+		bcf	Locstat,4		; So em_sub doesn't think this is a double press
+		call 	em_sub			; Emergency stop
+		return
 
+shrspeed	btfsc	Pot_enc_sta,0		;SW only set shared speed if encoder (bit 0 is 1 for pot, 0 for encoder)
+		return				;SW pot so return
+		movlw	0x7F			;SW reload speed from dspd packet
+		andwf	INDF0,w
+		movwf	Speed1
+		bz	setshrsp1		;SW is speed 0?
+		decf	WREG
+setshrsp1	movwf	Speed
+		call	spd_chr			;SW speed to chars for display
+		btfss	Datmode,3		;SW
+		call	clr_bot			;SW if dev mode not set
+		call	loco_lcd
+		return				;SW display updated
 
 ; Handle error opcode
 
@@ -3504,7 +3526,7 @@ mskloop	clrf	POSTINC0
 		call	lcd_wrt
 		movlw	B'00000001'		;clear display, start at DD address 0
 		call	lcd_wrt
-		call	ldely			;wait for screen clear
+		call	dely			;SW reduced from ldely. Wait for screen clear
 
 
 ; Download custom characters to LCD CG RAM
@@ -3563,22 +3585,38 @@ re_set1a	clrf	Tx1con		;make sure Tx1con is clear
 		clrf	Dispmode
 		lfsr	FSR2,Num1			;reset pointer
 		clrf	Numcount
-;		clrf	Enc_stat		;encoder status
 		movlw	" "
 		movwf	Adr1
 		movwf	Adr2
 		movwf	Adr3
 		movwf	Adr4
 
-        lfsr    FSR0,Cmdmajv
-        movlw   LOW Lastloco+1
-clrstat clrf    POSTINC0        ; clear accessory status bytes and cmd stn ver info
-        cpfseq  FSR0L
-      	bra     clrstat
+		lfsr    FSR0,Cmdmajv
+		movlw   LOW Lastloco+1
+clrstat		clrf    POSTINC0        ; clear accessory status bytes and cmd stn ver info
+		cpfseq  FSR0L
+		bra     clrstat
 
+;set speed step mode to that last used on this CAB
+		movlw	LOW Ss_md		;SW get previous CAB saved speed step mode from EEPROM
+		movwf	EEADR
+		call	eeread
+		movwf	Smode			;SW set speed step but then verify is a valid value (0=ss128, 1=ss14, 2=ss28)
+		bz	ssdone			;SW value is zero (ss128) so valid
+		andlw	B'11111100'		;SW check no bits other than bit 0 or bit 1 are set
+		bnz	ssinval			;SW invalid value
+		movf	Smode,W			;SW now verify Smode is either 1 or 2 and not 3
+		xorlw	B'00000011'
+		bz	ssinval			;SW xor will be non zero if only bit 0 or bit 1 set
+		bsf	Smode,7			;SW Smode was valid and either 1 or 2 (ss=14 or 28) so temporarily set bit 7 to flag display ss mode
+		bra	ssdone
+ssinval		clrf	Smode			;SW invalid speed step found in EEPROM so default to 128 SS
+		movlw	LOW Ss_md		;SW and re-set invalid value in EEPROM to default 0
+		movwf	EEADR
+		movf	Smode,W
+		call	eewrite
 
-		clrf	Smode			;default is 128 SS
-		movlw	0x07
+ssdone		movlw	0x07
 		subwf	RXB0D0,W			;is it a reset command
 		bz		re_set1b		;always a hard reset
 
@@ -3753,22 +3791,50 @@ re_set2	clrf	Fnmode				;holds function range
 
 		; Disply loco prompt after title delay
 
-clear_title
-		call	locprmpt	;prompt for loco
-		bcf		Modstat,6		; Clear flag that title is displayed
+clear_title	; removes title display on power up and then checks if need to display ss mode
+		; SW can come here twice depending if also need to display speed step mode. Modstat,6 used as flag
+		; both times in lpint but if Smode,7 also set then need to display speed step mode as already shown title and version
 
+		btfsc	Smode,7			;SW check if need to display ss mode at startup
+		bra	shwssmode		;SW display ss mode and will return from within that code
+
+		call	locprmpt		;prompt for loco as finished showing either title or speed step
+		bcf	Modstat,6		; Clear flag that title is displayed
 		return
 
+shwssmode	bcf	Smode,7			;SW clear flag so don't show ss mode again
+		call	lcd_clr			;SW clear screen
+		call	dely			;SW wait for clear
+		movlw	HIGH Spdstepstr		;get string
+		movwf	TBLPTRH
+		movlw	LOW Spdstepstr		;
+		call	lcd_str			;SW display Spd Step
+		call	lcd_cr			;SW then on next line show the actual speed step
+		btfss	Smode,0			;SW check if ss=14
+		bra	disss28
+disss14		movlw	HIGH Str14
+		movwf	TBLPTRH
+		movlw	LOW Str14		;
+		bra	disss			;SW common next steps
+
+disss28		movlw	HIGH Str28
+		movwf	TBLPTRH
+		movlw	LOW Str28
+
+disss		call	lcd_str
+
+		return				;SW back to lpint where called from and display speed step mode until next T0 interrupt
+
 locprmpt
-		call	lcd_clr				;clear screen
-		call	ldely				;wait for clear
-		bsf		LCD_PORT,LCD_RS		;data reg
+		call	lcd_clr			;clear screen
+		call	dely			;SW reduced from ldely as 2.5ms plenty long enough for display command to execute
+		bsf	LCD_PORT,LCD_RS		;data reg
 		movlw	HIGH Selstr			;get string
 		movwf	TBLPTRH
 		movlw	LOW Selstr			;
 		call	lcd_str
 		call	lcd_cr
-		bsf		LCD_PORT,LCD_RS
+		bsf	LCD_PORT,LCD_RS
 		movlw	"="
 		call	lcd_wrt
 		movlw	" "
@@ -4099,7 +4165,7 @@ badeewrite	incf	Count1				;SW increment counter if have a bad write
 		btfss	Count1,2			;SW if 4th bad write display error message
 		bra	badeewrite1
 		call	lcd_clr				;SW for diagnostics flag EE 2nd or more write on screen clear screen
-		call	ldely				;SWwait for clear
+		call	dely				;SWwait for clear
 		bsf	LCD_PORT,LCD_RS			;SWdata reg
 		movlw	HIGH Err_eewr			;SWget string
 		movwf	TBLPTRH				;SW
@@ -6278,7 +6344,7 @@ ss_send		movlw	OPC_STMOD		;STMOD
 			movff	Handle,Tx1d1
 			movff	Smode,Tx1d2
 			btfsc	Smode,1			;only 28 step, non interleaved
-			bsf		Tx1d2,0
+			bsf	Tx1d2,0
 			movlw	3
 			movwf	Dlc
 			call	sendTXa
