@@ -2221,21 +2221,6 @@ fr2   btfsc Datmode,3   ;in device mode?
     call  lcd_clr
     call  loco_lcd    ;clear Fn mode
     bra   keyback
-fr2
-    btfsc Modstat,7
-    goto  keyback
-    btfsc Progmode,4    ;service mode?
-    bra   frprog2
-    btfss Locstat,0   ;any loco?
-    bra   keyback
-    btfsc Locstat,6
-    bra   keyback
-    btfss Fnmode,1
-    bra   setfr2
-    bcf   Fnmode,1
-    call  lcd_clr
-    call  loco_lcd    ;clear Fn mode
-    bra   keyback
 
 setfr2  bsf   Fnmode,1
     bcf   Fnmode,0
