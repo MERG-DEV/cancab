@@ -5,7 +5,8 @@
 ;
 ;	Version 2q,2s - 2012 - new strings added
 ;		(added at version 2qBeta, released at version 2s)
-
+;	Version 2u - 14/04/2022 - SW - added EEwrite error message
+;
 ;	Use with CANCAB firmware version 2q onwards
 ; 
 ;
@@ -142,7 +143,6 @@ Testing	db	"Testing",0,0						; 8
 ; For test mode to see what is in LCD CG RAM
 
 Teststr db	0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f,0 ; 8
-TeststEnd 
 
 ; New strings added from 21/9/11 at end of table
 
@@ -158,6 +158,11 @@ Sharestr	db	"Share?",0,0,0					; 8		Sharing cabs
 Sessionstr	db	"SESSION",0,0					; 8		Session cancelled when stolen (forced) by another cab
 Cancelstr	db	"CANCELED",0					; 8
 Loststr		db	"LOST",0,0,0,0,0				; 8		Session lost when timed out or not there when reconnect after walkabout too late
+
+; Strings new for version 2u
+Err_eewr	db	"Err EEwr",0					; 8	Displayed to help diagnose if have to re-write to EEPROM
+
+TeststEnd									; end of strings marker
 
 ;***************************************************************************************************
 ;
@@ -183,7 +188,7 @@ Loststr		db	"LOST",0,0,0,0,0				; 8		Session lost when timed out or not there wh
 ;
 ;	This table is for French characters with accents
 
-		org	0x3800
+		org	0x5800
 
 Custchars
 Char08	db	B'00001000',B'00000100' ; à

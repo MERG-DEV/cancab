@@ -1,10 +1,11 @@
 ;   	TITLE		"Source for DCC CAB for CBUS"
-; 		; filename cancab4cBeta3.asm	02/05/20
+; 		; filename cancab2_4fBeta3.asm	01/11/22
 ;
 ;      All source code is copyright (C) the author(s) concerned
 ;       	(c) Mike Bolton 2009-2019
-;			With some modifications (c) Pete Brownlow and (c) Roger Healey
-;			as detailed in the revision history below
+;			With some modifications (c) Pete Brownlow, (c) Roger Healey
+;			and (c) Simon West as detailed in the revision history below
+;
 ;
 ;   This program is free software: you can redistribute it and/or modify
 ;   it under the terms of the GNU General Public License as published by
@@ -56,7 +57,7 @@
 
 ; Series 4 (CAB2) has backlit display and option for encoder or pot for speed.
 ; Construction is now all through hole.
-; Encoder or pot selected with J3 (PORTA,ENC). If hi = pot, if lo = enc.
+
 
 
 ; The setup timer is TMR3.
@@ -82,11 +83,43 @@
 ; v4b Beta 1	09/03/19 As 4aBeta5 but with the pot option selected by RA5 (MB)
 ; v4c Beta 1	21/09/19 As 4b Beta 1 but is revised dual code for encoder or pot.
 ; v4c Beta 2	11/01/20 As 4c Beta 1 but with encoder mods by SW.
-; v4c Beta 3	02/05/20 Correction to 4c Beta 2 on line 3564 as flagged by SW. (Wrong PORT)
+; v4d Beta 1	06/04/21 As 4d but mods for encoder  and pot in same orientation.
+;						 Pot / encoder choice now a single link. In if a pot. Grounds RA1.
+;						 so pot can be guaranteed to be zero at one end.
+;						 Use with rev h PCB.
+;						 Code not tested  (06/04/21)
+; v4d Beta 2	12/04/21 Bug fixes (MB)
+; v4d Beta 3	12/04/21 SW reverted bra set1a to bra set1b above set1c label
+; v4d Beta 4	25/03/22 SW For use with SW PCB 'CAB2 Ex Case Rev A' RA5 set as output and low as now connected to
+;		display R/_W prior to implementing display busy checks instead of fixed time waits after writes.
+; v4e Beta 1	14/04/22 SW Added read verify of EEPROM writes with test error message if has to do a re-write.
+;			    New cabmessages2u.inc with EEwrite error message. a_to_d modified to add up to 2 to 8 bit value
+;			    so can get speed step of 127 due to using RA2 to provide pot high voltage rather than Vdd.
+; v4e Beta2	13/06/22 SW Removed Enc_sw RAM flag and renamed new pot RAM flag to Pot_enc_sta bit 0 to use for different code where
+;			    required for a pot or encoder and bit 3 for encoder switch flag. Removed LCDtemp, Emspeed, Intemp, Intemp1,
+;			    Inbit, Incount, Input from RAM as not used.
+; v4e Beta3	06/07/22 SW Implemented new encoder algorithm that uses a lookup table having tested it in other SW code versions that
+;			    is much better at handling encoder bouncing without needing an encoder cleanup chip/cleanup logic
+;			    (though not quite as good as with!). Removed Atemp and Enc_stat from RAM and added Enc_prev & Enc_sum to RAM.
+;			    Put encoder/pot selection for bra set1a or set1b above set1c label for correct walkabout behaviour.
+;			    Pot needs decision logic to allow take back dispatched loco without turning knob to 0 as per original CAB code.
+; v4e Beta 4	07/07/22 SW Modified end of set1a for retrieving dispatched loco to set pot speed if non-zero without requiring knob
+;			    turning to zero unless existing speed is zero (which it shouldn't normally be if dispatched)
+; v4e Beta 5	17/07/22 SW Changed for bootloader to run without PLL for bootloader compatibility with other bootloaders not running with
+;			    PLL on following advice from Mike Bolton
+; v4f		19/08/22 SW Code version changed to full release for use in kit
+; v4f Beta1	06/10/22 SW Added long delay before check of pot or encoder to ensure display has stabilised before do any writes later.
+;			    In getProdId corrected first tblrd to be with post increment as was reading the same byte twice for the device
+;			    id rather than bytes in 3FFFFE and then 3FFFFF so now correctly reports actual CPU id when do parameter read.
+; v4f Beta2	31/10/22 SW Fixed display showing incorrect characters for some messages when used in encoder mode due to some lcd_str calls
+;			    not having set the TBLPTRH byte. Found 2 instances in err_1 and err_2.
+; v4f Beta3	01/11/22 SW Fixed when in test mode get incorrect characters after first message on encoder version due to TBLPTRH and
+;			    TBLPTRL not being preserved in routine nxtstr which is required as encoder algorithm also makes use of TBLPTR.
+;			    Modified enc3 and enc6 to take account of different speed steps so that one encoder detent = 1 speed step
+;			    regardless of speed step mode.
+; v4g		02/01/23 SW Code version changed to full release for first production kits. Identical to 4fBeta3 apart from release no.
 
-
-
-; Assembly options
+; Assembly option
 	LIST	P=18F25K80,r=hex,N=75,C=120,T=ON
 
 	include		"p18f25k80.inc"
@@ -94,14 +127,15 @@
 	;definitions  Change these to suit hardware.
 
 	include	"cbuslib/cbusdefs.inc"
+
 	include "cabmessages.inc"	; Version of messages file only changes if messages are added or message lengths changed
 
 ; Define the node parameters to be stored at nodeprm
 
 MAN_NO      equ	MANU_MERG	;manufacturer number
 MAJOR_VER   equ 4
-MINOR_VER   equ	"c"
-BETA_VER    equ 3         	 ; Beta build number: Set to zero for a release build
+MINOR_VER   equ	"g"
+BETA_VER    equ 0         	 ; Beta build number: Set to zero for a release build
 MODULE_ID   equ MTYP_CANCAB ; id to identify this type of module
 EVT_NUM     equ 0           ; Number of events
 EVperEVT    equ 0           ; Event variables per event
@@ -109,15 +143,21 @@ NV_NUM	    equ	0           ; Number of node variables
 NODEFLGS	equ B'00001010'  ; Node flags  Consumer=No, Producer=Yes, FliM=No, Boot=YES
 CPU_TYPE	equ	P18F25K80
 
-
-
+;definitions for bootloader running at 16MHz/no PLL and main code at 16MHz with PLL
+T0set equ  B'11000101'
+T3set equ	B'00110011'
+Tstart equ	.16
+Swait  equ  .255    ; Button hold delay
+CANBIT_RATE equ B'00001111'	;for 16 MHz resonator (64MHz clock)
+CANBIT_BL   equ B'00000011' ; Bootloader runs at 16MHz with PLL off
+EnumDelay   equ 1   ; Loop count for self enumeration time
 
 
 ;set config registers.
 
 
 
-	CONFIG	FCMEN = OFF, FOSC = HS2, IESO = OFF, PLLCFG = ON
+	CONFIG	FCMEN = OFF, FOSC = HS2, IESO = OFF, PLLCFG = OFF
 	CONFIG	PWRTEN = ON, BOREN = SBORDIS, BORV=0, SOSCSEL = DIG
 	CONFIG	WDTEN=OFF
 	CONFIG	MCLRE = ON, CANMX = PORTB
@@ -142,6 +182,7 @@ CPU_TYPE	equ	P18F25K80
 LCD_PORT equ	LATC
 LCD_EN	 equ	1
 LCD_RS	 equ	3
+LCD_RW	 equ	5
 MAX_FUN  equ    27
 
 ;S_PORT 	equ	PORTA	;setup switch  Change as needed
@@ -155,11 +196,11 @@ KEY_PORT equ	LATC
 
 LED1	equ		6	;RB6 is the red LED on the PCB
 LED2	equ		7	;RB7 is the green LED on the PCB
-
+ENC		equ 	1   ;RA1 senses pot if low
 ENC_PORT equ 	PORTA		;encoder port. PORTA, PA1 and PA2
 ENC_SW		equ	3	;swtch on encoder. PORTA, PA3
-ENC		equ 5		;enc / pot select bit
-ENC_RATSENS	equ 0x3F ;SW Rate sensitivity, 7F is original, reducing will make less sensitive
+
+ENC_RATESENS	equ 0x3F ;SW Rate sensitivity, 7F is original, reducing will make less sensitive
 					 ;SW don't reduce ENC_RATESENS<1 and less than 10h will do single steps
 
 
@@ -185,10 +226,10 @@ ENC_RATSENS	equ 0x3F ;SW Rate sensitivity, 7F is original, reducing will make le
 #define	CAN_RXM0SIDL	B'11101011'
 #define	CAN_RXM0EIDH	B'11111111'
 #define	CAN_RXM0EIDL	B'11111000'
-#define	CAN_BRGCON1		B'00001111'	;CAN bit rate controls. As for other CBUS modules
-#define	CAN_BRGCON2		B'10011110'
-#define	CAN_BRGCON3		B'00000011'
-#define	CAN_CIOCON		B'00100000'	;CAN I/O control
+#define	CAN_BRGCON1	CANBIT_BL	;CAN bit rate for bootloader
+#define	CAN_BRGCON2	B'10011110'
+#define	CAN_BRGCON3	B'00000011'
+#define	CAN_CIOCON	B'00100000'	;CAN I/O control
 ;	************************************************************ ** * * * * * * * * * * * * * * *
 ;	************************************************************ ** * * * * * * * * * * * * * * *
 #ifndef	EEADRH
@@ -274,39 +315,35 @@ ENC_RATSENS	equ 0x3F ;SW Rate sensitivity, 7F is original, reducing will make le
 	W_temp		;temp store for W reg
 	NN_temph	;node number in RAM
 	NN_templ
+	Pot_enc_sta	;status: for pot bit 0 = 1 or for enc bit 0 = 0.
+			;Bit 3 used for encoder switch flag to match RA3 pin (was Enc_sw byte)
 
 	IDcount		;used in self allocation of CAN ID.
 
 
 	Count		;counter for loading
-	Count1
-	Count2
+;32
+	Count1		;SW used in dely routine for display delays and also in eewrite number of tries
+	Count2		;SW used in lcd_str routine and ldely routine
 	Count4		;time between encoder steps
 	T0count		;needed for 64MHz clock.
 	T3count
 	Beep
 
-	Keepcnt		;keep alive counter
 	Lat0count	;latency counter - transmit buffer 0
-    Lat1count   ;latency counter - transmit buffer 1
+	Lat1count   ;latency counter - transmit buffer 1
 
 	Temp		;temps
 	Temp1
 	Tempd
-	LCDtemp		;temp for LCD write
 	Err_tmp
-	Intemp
-	Intemp1
-	Inbit
-	Incount
-	Input
-	Atemp		;port a temp value
 
-	Enc_sw		;flag for encoder switch
-	Enc_stat	;encoder state
-	Dlc			;data length
+	Enc_sum		;SW encoder angle sum
+	Enc_prev	;SW encoder previous state
 
-	Key			;key number
+	Dlc		;data length
+
+	Key		;key number
 	Key_temp	;for debounce
 	Debcount	;debounce counter
 	Deb4		;Four times for 16 MHz
@@ -316,11 +353,10 @@ ENC_RATSENS	equ 0x3F ;SW Rate sensitivity, 7F is original, reducing will make le
 	Speed		;current speed value from A/D or encoder
 	Speed1		;speed to send to loco
 	Speed2		;used in speed to ASCII conversion
-	Emspeed		;holds Em stop speed - not used!
+
 	Smode		;speed step mode
 
 	Handle		;handle given by CS
-
 
 	Modstat 	;node status. Used when finding a CAN_ID and handle.
 				;bit 0 set if it has CANid
@@ -349,14 +385,12 @@ ENC_RATSENS	equ 0x3F ;SW Rate sensitivity, 7F is original, reducing will make le
 
 	Chr_cnt		;character count. Used in LCD display
 
-
 	Char		;store char for LCD
 	Adr1		;ASCII address
+;64
 	Adr2
 	Adr3
 	Adr4
-
-
 
 	Num1		;numeric input values
 	Num2
@@ -388,9 +422,8 @@ ENC_RATSENS	equ 0x3F ;SW Rate sensitivity, 7F is original, reducing will make le
 	Ddr4
 	Devcnt		;number of device digits
 
-
-
 	Dnum1		;numeric input values
+
 	Dnum2
 	Dnum3
 	Dnum4
@@ -401,6 +434,7 @@ ENC_RATSENS	equ 0x3F ;SW Rate sensitivity, 7F is original, reducing will make le
 	Lo_temp		;address lo byte in hex to ascii conversion
 	Spd1		;ASCII speed
 	Spd2
+;96	 End of access RAM - following variables must have BSR set to 0 or use FSR access
 	Spd3
 
 	Fr1			;function bits  0 to 4
@@ -414,7 +448,7 @@ ENC_RATSENS	equ 0x3F ;SW Rate sensitivity, 7F is original, reducing will make le
 	Fn_tog		;on, off or toggle
 	Tog_flg		;used in setting mom for Fn keys
 
-	; End of access RAM - following variables must have BSR set to 0 or use FSR access
+
 
 	Funtemp
 	Fnmode		;flags for function and accessory mode
@@ -498,7 +532,7 @@ ENC_RATSENS	equ 0x3F ;SW Rate sensitivity, 7F is original, reducing will make le
 	L_adr4
 
 	TststrL		; Address of current test string
-    TststrH		;
+	TststrH		;
 
 					;the above variables must be in access space (00 to 5F)
 
@@ -509,8 +543,8 @@ ENC_RATSENS	equ 0x3F ;SW Rate sensitivity, 7F is original, reducing will make le
 
 
 	Eadr		;temp eeprom address
-    Eval
-    Ecount
+	Eval
+	Ecount
 
 	Tx0con			;start of transmit frame  0
 	Tx0sidh
@@ -1425,7 +1459,7 @@ main
 
 
 main1	;clrwdt					;clear watchdog
-		btfsc	ENC_PORT,ENC		;is it an encoder
+		btfsc	Pot_enc_sta,0		;is it an encoder
 		bra		pot				;no
 		btfss	PIR4,TMR4IF		;timer 4 rollover? Used for encoder rate dependency, 4mSec time.
 		bra		enc_sw			;no
@@ -1436,17 +1470,17 @@ main1	;clrwdt					;clear watchdog
 
 ;	This code is for an encoder
 
-enc_sw	btfsc	ENC_PORT,3			;is encoder button in? (no debounce used here)
+enc_sw	btfsc	ENC_PORT,ENC_SW	;is encoder button in? 	(no debounce used here)
 		bra		enc_up
-		btfsc	Enc_sw,0		;first time?
+		btfsc	Pot_enc_sta,ENC_SW		;check encoder switch status flag - first time?
 		bra		enc_up
 		clrf	Speed
 		clrf	Speed1
 		bsf		Datmode,2		;yes so send new speed
-		bsf		Enc_sw,0		;flag done
-enc_up	btfss	PORTA,3			;encoder button out?
+		bsf		Pot_enc_sta,ENC_SW	;flag done
+enc_up	btfss	ENC_PORT,ENC_SW				;encoder button out?
 		bra		main1d			;still in
-		bcf		Enc_sw,0		;button up so clear flag
+		bcf		Pot_enc_sta,ENC_SW	;button up so clear flag
 		bra		main1d
 
 ;	This code for a pot only.
@@ -1574,76 +1608,53 @@ sndspd	call	spd_pkt	        ; Send new changed speed
 
 
 
-		;kaypad scanning routine and encoder scan
+		;keypad scanning routine and encoder scan
+main3	btfsc	Pot_enc_sta,0		;is at an encoder?
+	bra	main3a			;no - so miss out encoder state machine
 
-main3
-		btfsc	ENC_PORT,ENC		;is at an encoder?
-		bra		main3a			;no
+	bra	mainenc		;SW jump over encoder transform array
 
-		movlw	B'00000110'		;mask except input A,B
-		andwf	PORTA,W
-		rrncf	WREG			;shift
-		movwf	Atemp			;store it
+; SW new encoder decoding routine
+enctrans    db	0,1,-1,0,-1,0,0,1,1,0,0,-1,0,-1,1,0
+
+		;keypad scanning routine and encoder scan
+
+mainenc		movlw	B'00000011'
+		andwf	Enc_prev		;mask to preserve last encoder reader
+		rlncf	Enc_prev		;then move previous encoder state left two places
+		rlncf	Enc_prev		;before appending current encoder reading
+		movlw	B'00000110'		;mask except input A,B for encoder
+		andwf	PORTA,W			;read current encoder status
+		rrncf	WREG			;shift right so encoder bits are in LSBs
 
 
-		movf	Enc_stat,F		;get state. Is it 0?
-		bz		enc0			;state 0
-		movlw	1
-		subwf	Enc_stat,W		;is it state 1?
-		bz		enc1
-		movlw	2
-		subwf	Enc_stat,W		;is it state 2?
-		bz		enc2
-		movlw	3
-		subwf	Enc_stat,W		;is it state 3?
-		bz		enc3
-		movlw	4
-		subwf	Enc_stat,W		;is it state 4?
-		bz		enc4
-		movlw	5
-		subwf	Enc_stat,W		;is it state 5?
-		bz		enc5
-		movlw	6
-		subwf	Enc_stat,W		;is it state 6?
-		bz		enc6
-		movlw	7				;SW Extra state added by SW for debounce
-		subwf	Enc_stat,W		;SW is it state 7 for debounce
-		bz		enc7			;SW
-		bra		main3a			;shouldn't ever be here
+		iorwf	Enc_prev		;OR with W and put result back in Enc_prev
 
-enc0	movlw	1
-		subwf	Atemp,W			;is it a 01
-		bz		enc0a
-		movlw	2
-		subwf	Atemp,W				;is it 10
-		bnz		main3a			;exit
-		movlw	1
-		movwf	Enc_stat
-		bra		main3a			;continue
-enc0a	movlw	4
-		movwf	Enc_stat
-		bra		main3a
+		clrf	TBLPTRU			;set table pointer to encoder decoding bit codes
+		movlw	LOW enctrans		;and add the 4 bit Enc_prev as index value
+		addwf	Enc_prev,W		;store in W
+		movwf	TBLPTRL
+		movlw	HIGH enctrans
+		bnc	encnocar		;no carry so high address is correct
+		incf	W			;add one to high address byte as there was a carry from the lower address byte
+encnocar	movwf	TBLPTRH
+		bsf	EECON1,EEPGD		;access program memory
+		TBLRD	*			;read value from enctrans(Enc_prev) into TABLAT
+		bcf	EECON1,EEPGD		;change back to access EEPROM
+		movf	TABLAT,W
+		addwf	Enc_sum,F
 
-enc1	movf	Atemp,F			;state 1. Is it 00
-		bz		enc1a
-		bra		main3a			;do nothing
-enc1a	movlw	2				;to state 2
-		movwf	Enc_stat
-		bra		main3a
+		bz	main3a			;check if enc_sum = 0 means no encoder activity so go and check keys
 
-enc2	movlw	1				;state 2. Is it 01
-		subwf	Atemp,W
-		bz		enc2a
-		bra		main3a			;do nothing
-enc2a	movlw	3
-		movwf	Enc_stat
-		bra		main3a
 
-enc3	movlw	3				;state 3. Is it 11?
-		subwf	Atemp,W
-		bz		enc3a
-		bra		main3a
-enc3a
+		movlw	B'00000011'
+		andwf	Enc_sum,W		;MOD 4 of enc_sum, if not zero encoder in process of turning
+		bnz	main3a			;no encoder cycle complete so go and check keys
+
+		movlw	4			;check if enc_sum = +4 (CW cycle)
+		subwf	Enc_sum,W
+		bnz	enc6
+		clrf	Enc_sum			;set enc_sum back to 0 having done a CW encoder cycle
 		movf	Count4,W		;get time from last step
 		rrncf	WREG			;divide by 16
 		rrncf	WREG
@@ -1651,46 +1662,33 @@ enc3a
 		rrncf	WREG
 		incf	WREG			;must be at least 1
 		andlw	B'00001111'		;mask
-		addwf	Speed,W			;speed steps
-		bnn		enc3b			;less than 127
+		btfsc	Smode,1			;SW check speed step mode for SS28
+		bra	enc3ss28		;Speed step mode is 28 multiply W by 4
+		btfss	Smode,0			;Speed step mode is 14 mulitply W by 8
+		bra	enc3a			;Speed step mode is 128 so use Wreg for speed increase as is
+		rlncf	WREG
+enc3ss28	rlncf	WREG			;
+		rlncf	WREG			;
+enc3a		addwf	Speed,W			;speed steps
+		bnn	enc3b			;less than 127
 		movlw	0x7F			;127 max
-enc3b	movwf	Speed			;new speed
-		movlw	ENC_RATSENS		;for counter
+enc3b		movwf	Speed			;new speed
+		movlw	ENC_RATESENS		;for counter
 		movwf	Count4			;for next step
 
 		movff	Speed,Speed1	;for send
 		movlw	0x7F
 		subwf	Speed1,W
-		bz		no_spd1
+		bz	no_spd1
 		incf	Speed1			;miss out speed 1
-no_spd1	bsf		Datmode,2		;flag speed change
-no_spd	movlw	7				;SW move to state 7 for debounce
-		movwf	Enc_stat		;SW
+no_spd1		bsf	Datmode,2		;flag speed change
+		bra	main3a
 
-		bra		main3a
+enc6		movlw	4			;check if enc_sum = -4 (CCW cycle)
+		addwf	Enc_sum,W
+		bnz	enc7
 
-
-
-enc4	movf	Atemp,F			;state 4. Is it 00
-		bz		enc4a
-		bra		main3a			;do nothing
-enc4a	movlw	5				;to state 2
-		movwf	Enc_stat
-		bra		main3a
-
-enc5	movlw	2				;state 5. Is it 10
-		subwf	Atemp,W
-		bz		enc5a
-		bra		main3a			;do nothing
-enc5a	movlw	6
-		movwf	Enc_stat
-		bra		main3a
-
-enc6	movlw	3				;state 3. Is it 11?
-		subwf	Atemp,W
-		bz		enc6a
-		bra		main3a
-enc6a
+		clrf	Enc_sum			;set enc_sum back to 0 having done a CCW encoder cycle
 		movf	Count4,W		;get time from last step
 		rrncf	WREG			;divide by 16
 		rrncf	WREG
@@ -1698,25 +1696,29 @@ enc6a
 		rrncf	WREG
 		incf	WREG			;must be at least 1
 		andlw	B'00001111'		;mask
-		subwf	Speed,W			;subtract speed steps
-		bnn		enc6c			;not less than 0?
+		btfsc	Smode,1			;SW check speed step mode for SS28
+		bra	enc6ss28		;Speed step mode is 28 multiply W by 4
+		btfss	Smode,0			;Speed step mode is 14 mulitply W by 8
+		bra	enc6a			;Speed step mode is 128 so use Wreg for speed increase as is
+		rlncf	WREG
+enc6ss28	rlncf	WREG			;
+		rlncf	WREG			;
+enc6a		subwf	Speed,W			;subtract speed steps
+		bnn	enc6c			;not less than 0?
 		clrf	WREG			;set to 0
-enc6c	movwf	Speed
-		movlw	0x7F			;for counter
+enc6c		movwf	Speed
+		movlw	ENC_RATESENS		;for counter
 		movwf	Count4			;for next step
 		movff	Speed,Speed1
 		movf	Speed,F
-		bz		enc6b			;don't increment if zero
+		bz	enc6b			;don't increment if zero
 		incf	Speed1			;miss out 1
-enc6b	bsf		Datmode,2		;flag speed change
-		bra		no_spd
+enc6b		bsf	Datmode,2		;flag speed change
+		bra	main3a
 
-enc7	movlw	ENC_RATSENS		;SW state 7. Has 4ms passed yet
-		subwf	Count4,W		;SW
-		bnz		enc7a			;SW 4ms now passed
-		bra		main3a			;SW 4ms not passed yet
-enc7a	clrf	Enc_stat		;SW onto state 0 now 4ms has passed
+enc7		clrf	Enc_sum			;reset enc_sum as invalid value
 
+; Check of key pad
 
 main3a	btfsc	Keyflag,0		;continue
 		bra		keyup
@@ -1913,7 +1915,7 @@ tknopt	btfsc	Dispmode,0		; Prompting for steal?
 		bra		tkprmt
 
 prmtsh	bsf		Dispmode,1		; Set share flag
-		bcf		Dispmode,0		; clear steal flag
+		bcf	Dispmode,0		; clear steal flag
 		call	loc_adr
 		movlw	HIGH Sharestr
 		movwf	TBLPTRH
@@ -1926,13 +1928,13 @@ tkprmt	call	lcd_str
 
 loco
 		call	lcd_clr
-		bcf		Datmode,6			;clear busy flag always
+		bcf	Datmode,6			;clear busy flag always
 		clrf	Progmode
 		clrf	Sermode
 		clrf	Dispmode
 		clrf	Setupmode
 		btfsc	Locstat,6			;in prog mode?
-		bra		prog_ret			;returning from prog mode
+		bra	prog_ret			;returning from prog mode
 		btfss	Modstat,7			;clear from stop all
 		bra		loco1a
 
@@ -2491,11 +2493,11 @@ reboot1		goto	reboot
 
 setup_mode
 		btfsc	Progmode,7		;	in speed step seting mode?
-		bra		keyback
+		bra	keyback
 		btfsc	Setupmode,2		; Are we showing command station version?
-		bra		tstdsp			; Yes - continue with test strings
+		bra	tstdsp			; Yes - continue with test strings
         btfsc   Setupmode,1     ; if already in test mode
-        bra		nxtstr			; straight on with next string
+        bra	nxtstr			; straight on with next string
         btfsc   Setupmode,0     ; Prog already pressed once?
         bra     setup_start     ; yes - this is second press so now in setup mode
         bsf     Setupmode,0
@@ -2518,11 +2520,11 @@ setup_start
 		call	lcd_str
 		movlw	0
 		addwf   Cmdmajv,w 	        ; Show major version number
-		bz		tstdsp				; if zero, not set so carry on with display string test
+		bz	tstdsp				; if zero, not set so carry on with display string test
 		movwf	W_temp
 		movlw	.100
 		subwf	W_temp,w			; If more than 100, test version so just report version less 100
-		bc		scsver				; If less than 100, continue with original number
+		bc	scsver				; If less than 100, continue with original number
 		movf	W_temp
 		movlw	"T"
 		call	lcd_wrt
@@ -2550,26 +2552,30 @@ tstdsp	bcf		Setupmode,2			; Not showing cmd station ver now
 
 frststr	movlw	HIGH Pmode1 	; point at first string
         movwf	TBLPTRH
-		movlw	LOW Pmode1
+	movlw	LOW Pmode1
         movwf   TBLPTRL
-		bra		disptst
+	bra	disptst
 
-nxtstr	tblrd*					; get next char in table
+nxtstr	movff	TststrH,TBLPTRH		;restore high byte of where are in message list
+	movff	TststrL,TBLPTRL
+	tblrd*					; get next char in table
 skpnul	movf	TABLAT,w
-		bnz		nxtdis
-		tblrd+*					; skip over any trailing nulls
-		bra		skpnul
+	bnz	nxtdis
+	tblrd+*					; skip over any trailing nulls
+	bra	skpnul
 
 nxtdis	movlw	HIGH TeststEnd
-		cpfslt	TBLPTRH 		; at end of list?
-		bra		chkls           ; check lsbytes of string address
+	cpfslt	TBLPTRH 		; at end of list?
+	bra	chkls           ; check lsbytes of string address
 disnxt  call    lcd_clr
         call    lcd_home
 
 disptst	movf    TBLPTRL,w
         call	lcd_str
-		bsf		Setupmode,1	; flag in setup mode
-		bra		keyback
+	bsf	Setupmode,1	; flag in setup mode
+	movff	TBLPTRH,TststrH	    ;store current high byte of where are in message list so can restore when return
+	movff	TBLPTRL,TststrL
+	bra	keyback
 
 chkls   movlw   LOW TeststEnd
         cpfslt  TBLPTRL
@@ -2802,7 +2808,9 @@ set2    movff	RXB0D4,Speed1
 		movlw	1
 		subwf	Speed1,W		;is it em.stop speed?
 		bz		set1c			;yes
-		bra		set1b			;no
+		btfss	Pot_enc_sta,0	    ;SW for walkabout with encoder branch to set1a else with pot set1b as no speed matching
+		bra		set1a	    ;encoder  (was set1b only for original pot code SW)
+		bra	set1b		    ;pot
 set1c	call	em_sub
 		bra		set1b
 
@@ -2830,16 +2838,16 @@ set1a   movff	RXB0D1,Handle		;put in handle
 		call	ss_send
 		movf	RXB0D4,w				; Get speed
 		andlw	0x7F
-		btfss	ENC_PORT,ENC
-		bra		setspd
-
-		call	adc_zero			; If so, wait for knob to be zero (not with encoder)
+		btfss	Pot_enc_sta,0	    ;SW for pot need additional check for zero but not with encoder
+		bra	setspd		    ;as encoder set speed
+		bnz	setspd		    ;SW here if is a pot and if speed not zero go and set it
+		call	adc_zero	    ;If zero, wait for knob to be zero (not with encoder)
         movlw   0                   ; Set current speed to zero
 
 setspd  				; Set speed to current loco speed
 		movwf	Speed1
 		movf	WREG
-		bz		setsp1				;is speed 0?
+		bz	setsp1				;is speed 0?
 		decf	WREG				;no so decrement
 setsp1	movwf	Speed
 		lfsr	FSR0,RXB0D4			; Point at speed/direction in ploc packet
@@ -2913,15 +2921,19 @@ err 	movlw	ERR_SESSION_NOT_PRESENT
         ; STACK FULL ERROR
 
 err_1	call	loc_adr				;loco number on top line
-		movlw	LOW Str_ful			;"FULL"
-		bra		errnosel
+	movlw	HIGH Str_tkn
+	movwf	TBLPTRH
+	movlw	LOW Str_ful			;"FULL"
+	bra	errnosel
 
         ; LOCO TAKEN ERROR
 
-err_2	bsf		Dispmode, 2			; Flag for waiting at "Taken" message
-		bsf		Datmode, 6			; Set busy flag so does not try to go into accessory mode
-		call	loc_adr
-		movlw	LOW Str_tkn			;"TAKEN"
+err_2	bsf	Dispmode, 2			; Flag for waiting at "Taken" message
+	bsf	Datmode, 6			; Set busy flag so does not try to go into accessory mode
+	call	loc_adr
+	movlw	HIGH Str_tkn
+	movwf	TBLPTRH
+	movlw	LOW Str_tkn			;"TAKEN"
         bra     errnosel
 
 errother call   loc_adr
@@ -3274,12 +3286,18 @@ nopdev	bcf		Datmode,0
 ;*************************************************************************
 
 setup	clrwdt
-		clrf	INTCON			;no interrupts yet
 		movlb	.15
-		clrf	WREG			;ANCON0 = 0
-		btfsc	ENC_PORT,ENC
-		movlw	B'00000001'		;for pot input
-		movwf	ANCON0
+		bsf	OSCTUNE,PLLEN		;Turn on PLL to run at full speed
+
+		clrf	INTCON			;no interrupts yet
+		lfsr	FSR0, 0			; clear page 1
+
+nextram	clrf	POSTINC0
+		tstfsz	FSR0L
+		bra		nextram
+
+		movlb	.15
+		clrf	ANCON0			;All I/O digital for now
 		clrf	ANCON1
 
 		clrf	CM1CON			;disable comparator
@@ -3290,32 +3308,42 @@ setup	clrwdt
 		setf	WPUB			;all pullups on
 		movlb	0
 
-		movlw	B'00101110'		;Port A for encoder/pot select on PA5.
+		movlw	B'00001110'		;Port A for encoder/pot select on RA1. Also inputs on RA2 & RA3.
 		movwf	TRISA			;
-		nop
-		nop
+		movlw	B'00001110'		; RA0 set low for encoder common, RA5 set low, display set for write
+		movwf	ENC_PORT		;set for encoder
 
-;	This is for a pot.
 
+; Check if have a pot or an encoder
+		call	ldely			;long delay to allow display to stabilise (and SW encoder cleanup PIC if fitted)
+		clrf	Pot_enc_sta		;clear status before using this register to be encoder unless set by code below checking for pot
 		movf	ENC_PORT,W
-
-		btfss	WREG,ENC		;is it an encoder
-		bra		pset2			;yes
-
+		btfsc	WREG,ENC		;RA1 is low for a pot, high for encoder
+		bra	pset1			;yes, is an encoder so skip pot configuration
+		bsf	Pot_enc_sta,0		;configure as a pot = 1
+		movlw	B'00001011'		;RA1 is input but tied to 0v and RA2 is 5V output, RA0 is speed input, RA5 output to Display R/_W
+		movwf	TRISA			;set port A for a pot
+		movlw	B'00000100'
+		movwf	LATA			;set +5V on pot (RA2), RA5 set low to write to display.
 		movlw	B'00000001'		;A/D enabled. Channel 0
 		movwf	ADCON0			;
-		movlw	B'00000000'		;A/D on PORTA,0, rest are digital
+		movlw	B'00000000'		;use Vdd as Vref+, single ended conversion (neg chan = Vss)
 		movwf	ADCON1
-		movlw	B'00111110'		;set sampling rate
+		movlw	B'00111110'		;Left justified, 20TAD acquistion time, Focs/64 clock: sampling rate
 		movwf	ADCON2
 		bsf		TRISA,0			;A/D input for pot
-		bra		pset1
+		movlb	.15
+		movlw	B'00000001'		;for pot input
+		movwf	ANCON0
+		clrf	ANCON1
+		movlb	0
+;		bra		pset1		;skip encoder configuration as using a pot
 
-pset2
-		movlw	B'00000110'
-		andwf	ENC_PORT,W		;read PORTA for encoder
-		movwf	Atemp
-		clrf	Enc_stat		;encoder state
+;pset2
+;		movlw	B'00000110'
+;		andwf	ENC_PORT,W		;read PORTA for encoder
+;		movwf	Atemp
+;		clrf	Enc_stat		;encoder state
 
 
 		;port settings will be hardware dependent. RB2 and RB3 are for CAN.
@@ -3330,15 +3358,11 @@ pset1
 								;RB4 RB5 are keypad rows 3 and 4
 		movwf	TRISB
 		clrf	PORTB
-		bsf		PORTB,2			;CAN recessive
+		bsf	PORTB,2			;CAN recessive
 		movlw	B'00000000'		;Port C  column drive and LCD drive. RC2 is sounder output (PWM)
 		movwf	TRISC
 		clrf	PORTC
-		lfsr	FSR0, 0			; clear page 1
 
-nextram	clrf	POSTINC0
-		tstfsz	FSR0L
-		bra		nextram
 
 		setf	NN_temph		;provisional NN for all CABs is FFFF
 		setf	NN_templ
@@ -3370,13 +3394,13 @@ nextram	clrf	POSTINC0
 		clrf	BSR				;set to bank 0
 		clrf	EECON1			;no accesses to program memory
 		clrf	Lat0count
-        clrf    Lat1count
+		clrf    Lat1count
 
 		clrf	COMSTAT			;clear any errors
 
-		bsf		CANCON,ABAT		;abort any waiting frames
+		bsf	CANCON,ABAT		;abort any waiting frames
 
-		bsf		CANCON,7		;CAN to config mode
+		bsf	CANCON,7		;CAN to config mode
 		movlw	B'10110000'
 		movwf	ECANCON
 		bsf		ECANCON,5		;CAN mode 2
@@ -3395,7 +3419,7 @@ nextram	clrf	POSTINC0
 		clrf	B5CON
 
 
-		movlw	CAN_BRGCON1		;set CAN bit rate at 125000
+		movlw	CANBIT_RATE		;set application CAN bit rate at 125000
 		movwf	BRGCON1
 		movlw	B'10011110'		;set phase 1 etc
 		movwf	BRGCON2
@@ -3421,7 +3445,7 @@ nextram	clrf	POSTINC0
 
 mskload	lfsr	0,RXM0SIDH		;Clear masks, point to start
 mskloop	clrf	POSTINC0
-		movlw	LOW RXM1EIDL+1		;end of masks
+		movlw	LOW (RXM1EIDL+1)		;end of masks
 		cpfseq	FSR0L
 		bra		mskloop
 
@@ -3465,7 +3489,7 @@ mskloop	clrf	POSTINC0
 
 ;set up LCD
 		clrwdt
-		bcf		LCD_PORT,LCD_RS	;control register
+		bcf	LCD_PORT,LCD_RS		;control register
 		movlw	B'00110011'		;reset and 4 bit mode
 		call	lcd_wrt
 		movlw	B'00110010'		;reset and 4 bit mode sequence
@@ -3539,8 +3563,7 @@ re_set1a	clrf	Tx1con		;make sure Tx1con is clear
 		clrf	Dispmode
 		lfsr	FSR2,Num1			;reset pointer
 		clrf	Numcount
-		clrf	Enc_stat		;encoder status
-		clrf	Enc_sw
+;		clrf	Enc_stat		;encoder status
 		movlw	" "
 		movwf	Adr1
 		movwf	Adr2
@@ -3561,7 +3584,7 @@ clrstat clrf    POSTINC0        ; clear accessory status bytes and cmd stn ver i
 
 		bcf		KEY_PORT,7			;for hard reset test. Is the Prog button in?
 		nop
-		btfsc	PORTB,5			;clear if in
+		btfsc	PORTB,5			;clear if in (was KEY_PORT  SW)
 		bra		re_set4
 
 re_set1b
@@ -4050,7 +4073,9 @@ eeread	bcf		EECON1,EEPGD	;read a EEPROM byte, EEADR must be set before this sub.
 ;               Pass value to write in w (w is not preserved)
 ;               Address to write to in EEADR
 ;
-eewrite         movwf	EEDATA              ;write to EEPROM, EEADR must be set before this sub.
+eewrite         clrf	Count1		    ;used if get bad ee writes to check number
+		movwf	W_temp		    ;write value to Temp so can do compare after writing to EEPROM
+eewriteagn	movwf	EEDATA              ;write to EEPROM, EEADR must be set before this sub.
 		bcf	EECON1,EEPGD
 		bcf	EECON1,CFGS
 		bsf	EECON1,WREN
@@ -4060,16 +4085,29 @@ eewrite         movwf	EEDATA              ;write to EEPROM, EEADR must be set be
 		movwf	EECON2
 		movlw	0xAA
 		movwf	EECON2
-		bsf	EECON1,WR
-eetest          btfsc	EECON1,WR
+		bsf		EECON1,WR
+eetest  btfsc	EECON1,WR
 		bra	eetest
-		bcf	PIR2,EEIF
+		bcf	PIR4,EEIF	    ;was PIR2. Changed SW
 		bcf	EECON1,WREN
-;		clrf	PIR3                ;prevent recursive interrupts
-
+		call	eeread		    ;SW now read the EE address just written into W
+		CPFSEQ	W_temp		    ;SW compare with value that should have been written
+		bra	badeewrite	    ;SW EE write failed so try again
 		movff	TempINTCON,INTCON   ;reenable interrupts
+		return			    ;write completed successfully
+badeewrite	incf	Count1				;SW increment counter if have a bad write
+		btfss	Count1,2			;SW if 4th bad write display error message
+		bra	badeewrite1
+		call	lcd_clr				;SW for diagnostics flag EE 2nd or more write on screen clear screen
+		call	ldely				;SWwait for clear
+		bsf	LCD_PORT,LCD_RS			;SWdata reg
+		movlw	HIGH Err_eewr			;SWget string
+		movwf	TBLPTRH				;SW
+		movlw	LOW Err_eewr			;SW
+		call	lcd_str				;SW
+badeewrite1	movf	W_temp,W	    ;SW put the original value to write to EE back in W
+		bra	eewriteagn	    ;SW write it again.
 
-		return
 
 ;***************************************************************
 ;       Fill bytes of EEPROM with a value
@@ -4183,10 +4221,10 @@ lcd_wrt	movwf	Temp		;store char
 		iorwf	LCD_PORT
 		call	sdely		;setup time
 
-		bsf		LCD_PORT,LCD_EN		;strobe
+		bsf	LCD_PORT,LCD_EN		;strobe
 
 		call	sdely				;short delay
-		bcf		LCD_PORT,LCD_EN
+		bcf	LCD_PORT,LCD_EN
 
 		movlw	B'00001111' ;clear data lines
 		andwf	LCD_PORT,F
@@ -4198,10 +4236,10 @@ lcd_wrt	movwf	Temp		;store char
 		iorwf	LCD_PORT	;data to LCD
 		call	sdely
 
-		bsf		LCD_PORT,LCD_EN		;strobe
+		bsf	LCD_PORT,LCD_EN		;strobe
 
 		call	sdely				;short delay
-		bcf		LCD_PORT,LCD_EN
+		bcf	LCD_PORT,LCD_EN
 
 		call	dely			;delay
 		swapf	Temp,F			;restore W
@@ -4307,10 +4345,18 @@ a_done	btfsc	ADCON0,GO
 		bra		a_done
 		bcf		Datmode,2		;clear speed change
 		movff	ADRESH,Adtemp
-		rrncf	Adtemp,F
-		bcf		Adtemp,7		;128 steps
 		movf	Adtemp,W
-		subwf	Speed,W
+					    ;SW this next part to get max speed step of 127 when using logic pin to provide pot +ve voltage
+					    ;SW rather than tied to Vdd. Tries 2 increments but will undo if value before increment was 255
+		bz	chkspdchange	    ;SW if zero with 8 bits is zero so don't bother to change to 7 bit
+		infsnz	Adtemp,F	    ;SW add 1 to 8 bit A/D value
+		decf	Adtemp,F	    ;SW reverse increment of Adtemp back to 255 as it must have been 255 before increment
+		infsnz	Adtemp,F	    ;SW add 1 to 8 bit A/D value
+		decf	Adtemp,F	    ;SW reverse increment of Adtemp back to 255 as it must have been 255 before increment
+		rrncf	Adtemp,F
+		bcf	Adtemp,7		;128 steps
+		movf	Adtemp,W
+chkspdchange	subwf	Speed,W		    ;SW
 		bz		nospeed			;has not changed
 		movff	Adtemp,Speed	;new speed for change detection
 
@@ -6412,7 +6458,7 @@ getProdId
 		movlw	0xFE
 		movwf	TBLPTRL
 		bsf		EECON1,EEPGD
-		tblrd*
+		tblrd*+
 		movff	TABLAT,PRODL
 		tblrd*
 		movff	TABLAT,PRODH
@@ -6920,7 +6966,7 @@ deb_sub	clrwdt
 
 
 ;*******************************************************
-;		a delay routine
+;		a delay routine (approx 2.5ms)
 
 dely	movlw	.40
 		movwf	Count1
@@ -6934,7 +6980,7 @@ dely1	clrwdt
 
 ;****************************************************************
 
-;		longer delay
+;		longer delay (approx 250ms)
 
 ldely	movlw	.100				; counts
 		movwf	Count2
@@ -6947,6 +6993,8 @@ ldely1	call	dely
 ;************************************************************************
 
 ;		short delay for LCD write strobe
+;		(at 64MHz 4 clock cycles = 62.5ns = 1 instruction cycle)
+;		(call = 2, 4 x NOP = 4, return = 2)= 500ns
 
 sdely	nop
 		nop
@@ -6962,9 +7010,9 @@ sdely	nop
 CANid	de	B'01111111',0	;CAN id default
 NodeID	de	0xFF,0xFF	;Node ID. CAB default is 0xFFFF
 E_hndle de	0xFF,0		;saved handle. default is 0xFF
-E_addr  de      0,0             ; Saved loco address during walkabout to check when reconnecting
-Ser_md 	de	0       	;program / read mode
-Ss_md   de      0               ;service mode
+E_addr  de      0,0     ; Saved loco address during walkabout to check when reconnecting
+Ser_md 	de		0       ;program / read mode
+Ss_md   de      0       ;service mode
 
 ;key number conversion
 
